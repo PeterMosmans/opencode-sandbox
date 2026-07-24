@@ -1,0 +1,13 @@
+# Memory and Playwright work files are local
+.memory/
+.playwright-mcp/
+# Test files are local
+tests/
+# Certificates shouldn't be part of this repo
+*.pem
+# Environment files (use .env.example as template)
+.env
+# Dotfiles... except the .dockerignore file and this file :)
+.*
+!.dockerignore
+!.gitignore
