@@ -10,7 +10,6 @@
 # ~/.gitconfig
 #
 # The following files/directories are exclusive within the project directory
-# .memory/agentmemory - agentmemory MCP
 # .memory/codebase-memory-mcp - (set using CBM_CACHE_DIR)
 # .memory/opencode - OpenCode session database and prompt history
 # .memory/engram - Engram
@@ -108,7 +107,7 @@ preflight-run: # Check prerequisites for run and elevated commands
 	@test -d ~/.config/opencode || { printf '%b%s%b\n' '$(RED)' 'ERROR: ~/.config/opencode directory not found (required for run/)' '$(RESET)'; exit 1; }
 	@test -f ~/.local/share/opencode/auth.json || { printf '%b%s%b\n' '$(RED)' 'ERROR: ~/.local/share/opencode/auth.json not found (required for run)' '$(RESET)'; exit 1; }
 	@test -f ~/.gitconfig || { printf '%b%s%b\n' '$(RED)' 'ERROR: ~/.gitconfig not found (required for run)' '$(RESET)'; exit 1; }
-	@mkdir -p .memory/{agentmemory,codebase-memory-mcp,engram,opencode} 2>/dev/null; \
+	@mkdir -p .memory/{codebase-memory-mcp,engram,opencode} 2>/dev/null; \
 	touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
 	@printf '%b%s%b\n' '$(GREEN)' 'All run/elevated preflight checks passed.' '$(RESET)'
 
@@ -195,20 +194,8 @@ latest: preflight-run # Run OpenCode sandboxed in the current directory
 	fi
 	@docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest
 
-bash:
+bash: # Run a bash shell
 	docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest /bin/bash
-
-mcptest:
-	docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest opencode mcp list
-
-mcpdoctor:
-	docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest agentmemory doctor
-
-validate:
-	@docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):$(IMAGE_TAG) opencode stats
-
-custom:	 # Run OpenCode sandboxed in the current directory
-	@docker run --rm -it $(SANDBOX_MOUNTS) $(CUSTOM_IMAGE_NAME)
 
 server: preflight-run # Run OpenCode server in the current directory
 	@test -n "$(OPENCODE_SERVER_PASSWORD)" || { printf '%b%s%b\n' '$(RED)' 'ERROR: OPENCODE_SERVER_PASSWORD must be set' '$(RESET)'; exit 1; }
@@ -270,7 +257,7 @@ remove: # Remove all sandbox image variants (tags and untagged)
 		docker rmi --force "$$img" 2>/dev/null || true; \
 	done
 
-PACKED_FILES := .env Dockerfile .dockerignore Makefile test.sh README.md package.json requirements.txt
+PACKED_FILES := env.example Dockerfile .dockerignore Makefile test.sh README.md package.json requirements.txt
 
 package: # Create a zip archive with all files needed to build and test the image, named with version tag
 	@zip -q "sandbox-$(IMAGE_TAG).zip" $(PACKED_FILES)
