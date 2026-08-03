@@ -1,7 +1,8 @@
 # OpenCode Sandbox
 
-A Docker-based sandboxed environment for running [OpenCode](https://opencode.ai)
-with additional development tools and MCP servers pre-installed.
+An all-in-one, Docker-based sandboxed environment for running
+[OpenCode](https://opencode.ai) with additional development tools and MCP
+servers pre-installed.
 
 ## Features
 
@@ -13,13 +14,58 @@ with additional development tools and MCP servers pre-installed.
 - **Prettier, Biome, Ruff, Stylelint** — Linters and formatters
 - **ShellCheck, yamllint** — Shell and YAML linting
 
+## Architecture
+
+The OpenCode configuration directory itself, including skills, tools, and
+agents, is mounted read-only.
+
+```
+# Enforce the configuration location
+OPENCODE_CONFIG_DIR=/home/node/.config/opencode
+
+# Map the original OpenCode config directory as read-only
+~/.config/opencode:/home/node/.config/opencode:ro
+
+# If it exists, the authentication file will also be mapped read-only
+~/.local/share/opencode/auth.json:/home/node/.local/share/opencode/auth.json:ro
+```
+
+The project directory where opencode-sandbox is started, is mounted as
+read-write project root.
+
+Project-specific files like prompts and sessions are stored within the project
+directory itself, under the `.memory` directory. This allows you to store and
+resume sessions while still having a sandboxed environment.
+
+```
+$(PROJECT_ROOT)/.memory/codebase-memory-mcp/:/home/node/codebase-memory-mcp/:rw
+$(PROJECT_ROOT)/.memory/engram/:/home/node/.engram/:rw
+$(PROJECT_ROOT)/.memory/opencode/prompt-history.jsonl:/home/node/.local/state/opencode/prompt-history.jsonl:rw
+$(PROJECT_ROOT)/.memory/opencode/opencode.db:/home/node/.local/share/opencode/opencode.db:rw
+$(PROJECT_ROOT)/.memory/opencode/opencode.db-shm:/home/node/.local/share/opencode/opencode.db-shm:rw
+$(PROJECT_ROOT)/.memory/opencode/opencode.db-wal:/home/node/.local/share/opencode/opencode.db-wal:rw
+```
+
+MCP servers like engram and Playwright live within the container. Configuration
+files are mapped read-only, if they exist on the host.
+
+```
+~/.gitconfig:/home/node/.gitconfig:ro
+~/.agent-browser/config.json:/home/node/.agent-browser/config.json:ro
+```
+
 ## Prerequisites
 
 - Docker
+- make
+- a working OpenCode configuration
 
 ## Quick Start
 
 ```bash
+# Use the default .env file, adjust where needed
+cp env.example .env
+
 # Build the sandbox image
 make image
 
@@ -27,12 +73,28 @@ make image
 make run
 ```
 
+There is also an elevated version, which gives the OpenCode container Docker
+access. Please note that this is not secure, and would allow OpenCode to break
+out of the sandbox.
+
+```
+make run-elevated
+```
+
+This will map the following files:
+
+```
+/usr/bin/docker:/usr/bin/docker:ro
+/usr/libexec/docker:/usr/libexec/docker:ro
+/var/run/docker.sock:/var/run/docker.sock:ro
+```
+
 ## Configuration
 
 Configuration is managed via a `.env` file. Copy the example and adjust:
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
 ### Environment Variables
@@ -72,26 +134,6 @@ make run-tests                # Run all tests inside Docker
 make run-tests TYPE=linters   # Run only linter checks
 make run-tests TYPE=updates   # Check for package updates
 ./test.sh [IMAGE_NAME] [TYPE] # Run tests locally
-```
-
-### Package
-
-```bash
-make package                  # Create a zip archive of build files
-make package IMAGE_TAG=v1.0.0 # Tag the archive
-```
-
-## Project Structure
-
-```
-.
-├── Dockerfile          # Docker image definition
-├── .dockerignore       # Docker build exclusions
-├── env.example        # Configuration template
-├── Makefile            # Build and run targets
-├── package.json        # npm dependencies
-├── requirements.txt    # Python dependencies
-└── test.sh             # Test script
 ```
 
 ## License
