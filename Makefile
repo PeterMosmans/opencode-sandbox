@@ -63,7 +63,7 @@ OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
 #	make build IMAGE_TAG=abc1234   → tags with a commit/sha
 IMAGE_TAG ?= latest
 # Group for sandboxed runs
-GROUP ?= pentester
+GROUP ?= $(shell id -gn)
 SANDBOX_GID := $(shell getent group $(GROUP) | cut -d: -f3)
 # ANSI color codes (escaped for Make compatibility)
 BOLD   := \033[1m
@@ -171,12 +171,12 @@ SANDBOX_MOUNTS := $(shell \
 -v $(PROJECT_ROOT)/.memory/opencode/opencode.db-wal:/home/node/.local/share/opencode/opencode.db-wal:rw \
 -v $(PROJECT_ROOT):/$(PROJECT_NAME):rw \
 -v ~/.config/opencode:/home/node/.config/opencode:ro \
--v ~/.local/share/opencode/auth.json:/home/node/.local/share/opencode/auth.json:ro \
  -w /$(PROJECT_NAME) \
 "; \
   [ -n "$(HOST_LEMONADE)" ] && m="$$m --add-host $(LEMONADE_HOST):$(HOST_LEMONADE)"; \
   [ -f ~/.gitconfig ] && m="$$m -v ~/.gitconfig:/home/node/.gitconfig:ro"; \
   [ -f ~/.agent-browser/config.json ] && m="$$m -v ~/.agent-browser/config.json:/home/node/.agent-browser/config.json:ro"; \
+  [ -f ~/.local/share/opencode/auth.json ] && m="$$m -v ~/.local/share/opencode/auth.json:/home/node/.local/share/opencode/auth.json:ro" \
   echo "$$m")
 
 run: preflight-run # Run OpenCode sandboxed in the current directory
