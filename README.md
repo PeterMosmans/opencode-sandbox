@@ -102,6 +102,7 @@ cp env.example .env
 | Variable                   | Default          | Description                                          |
 | -------------------------- | ---------------- | ---------------------------------------------------- |
 | `ENGRAM_VERSION`           | `1.20.0`         | Version of the Engram binary to download             |
+| `GROUP`                    | default group    | Group name to be used in Docker container            |
 | `LEMONADE_HOST`            | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)    |
 | `HOST_LEMONADE`            | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev) |
 | `TARGET`                   | `example.com`    | Test target hostname for screenshot tests            |
