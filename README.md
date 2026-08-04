@@ -73,15 +73,15 @@ make image
 make run
 ```
 
-There is also an elevated version, which gives the OpenCode container Docker
-access. Please note that this is not secure, and would allow OpenCode to break
-out of the sandbox.
+There is also an **elevated** version, which allows the OpenCode container
+Docker access. **Please note that this is not secure**, and would allow (any
+process within) OpenCode to break out of the sandbox easily.
 
 ```
 make run-elevated
 ```
 
-This will map the following files:
+This will map the following additional files:
 
 ```
 /usr/bin/docker:/usr/bin/docker:ro
