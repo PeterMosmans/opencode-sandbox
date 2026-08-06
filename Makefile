@@ -208,7 +208,7 @@ image: # Build a fresh OpenCode sandbox
 
 tag-version: # Tag the latest image with the opencode-ai version from package.json
 	@docker tag $(IMAGE_NAME):latest $(IMAGE_NAME):$(OPENCODE_VERSION)
-	@printf '%b%s%b: %s\n' '$(GREEN)' 'Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION)' '$(RESET)'
+	@printf '%b%s%b %s\n' '$(GREEN)' 'Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION)' '$(RESET)'
 
 custom-image: # Build image from alternative Dockerfile with different name
 	@test -f Dockerfile.custom || { $(call error_msg,ERROR: Dockerfile.custom not found); exit 1; }
