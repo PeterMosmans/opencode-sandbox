@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
 set -euo pipefail
 
 # Test script for OpenCode sandbox Docker images
@@ -205,6 +206,45 @@ test_updates() {
   echo ""
 }
 
+test_config() {
+  info "Testing OpenCode configuration..."
+  local config_file
+  # shellcheck disable=SC2016
+  config_file="$(run_cmd sh -c 'echo "${OPENCODE_CONFIG:-~/.config/opencode/opencode.json}"' 2>/dev/null || echo "")"
+  config_file="${config_file:-~/.config/opencode/opencode.json}"
+  # Resolve ~ to actual home
+  config_file="${config_file/#\~/$HOME}"
+
+  if run_cmd test -f "$config_file"; then
+    success "Configuration file found: ${BOLD}${config_file}${RESET}"
+
+    if run_cmd command -v jq >/dev/null 2>&1; then
+      local model
+      model="$(run_cmd jq -r '.model // "not set"' "$config_file" 2>/dev/null)"
+      printf '  Default model: %b%s%b\n' "$BOLD" "$model" "$RESET"
+
+      local providers
+      providers="$(run_cmd jq -r '.provider // {} | keys[]' "$config_file" 2>/dev/null)"
+      if [ -n "$providers" ]; then
+        printf '  Providers:\n'
+        while IFS= read -r provider; do
+          local url
+          url="$(run_cmd jq -r ".provider[\"${provider}\"].options.baseURL // \"not set\"" "$config_file" 2>/dev/null)"
+          printf '    %b%s%b -> %s\n' "$BOLD" "$provider" "$RESET" "$url"
+        done <<< "$providers"
+      fi
+    else
+      error "jq not found — skipping config parsing"
+    fi
+
+    success "Configuration loaded successfully"
+  else
+    error "Configuration file not found: ${config_file}"
+    error "OpenCode configuration is missing or inaccessible"
+    return 1
+  fi
+}
+
 run_tests() {
   info "Running tests on image: ${BOLD}${IMAGE_NAME}${RESET}"
   echo ""
@@ -213,6 +253,8 @@ run_tests() {
   info "Running under user ID ${ID} and group ID ${SANDBOX_GID}"
   run_cmd opencode --version
   run_cmd id
+  test_config
+  echo ""
   test_doctors
   case "$TEST_TYPE" in
     browsers)

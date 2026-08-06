@@ -53,6 +53,7 @@ RUN apt-get update && \
     file \
     git \
     iputils-ping \
+    jq \
     libxml2-utils \
     lsof \
     make \
