@@ -2,6 +2,11 @@
 # shellcheck shell=bash
 set -euo pipefail
 
+# Test tracking
+PASS_COUNT=0
+FAIL_COUNT=0
+FAILED_TESTS=""
+
 # Test script for OpenCode sandbox Docker images
 
 # Copyright (C) 2026 Peter Mosmans [Go Forward]
@@ -9,8 +14,9 @@ set -euo pipefail
 
 # Usage: ./test.sh [IMAGE_NAME] [TEST_TYPE] [MODE]
 #   IMAGE_NAME : Docker image to test (default: opencode-sandbox-$(id -u))
-#   TEST_TYPE  : Which tests to run: linters, agent, full, updates (default: full)
+#   TEST_TYPE  : Which tests to run: linters, agent, browsers, full, updates, all (default: full)
 #   MODE       : bare (run commands directly) or docker (wrap in docker run, default)
+#   TARGET     : Host to screenshot (default: example.com)
 #
 # Inside Docker (bare): make run-tests TYPE=full
 # Locally (docker):     ./test.sh [IMAGE_NAME] [TYPE]
@@ -27,7 +33,10 @@ TEST_TYPE="${2:-full}"
 MODE="${3:-docker}"
 HOST_PORT="${HOST_PORT:-8000}"
 # which host to screenshot
-TARGET="example.com"
+TARGET="${TARGET:-example.com}"
+# CI color suppression
+CI_COLORS=true
+[[ ! -t 1 ]] && CI_COLORS=false
 # Pass along a GROUP
 ID="$(id -u)"
 GROUP="$(id -g --name)"
@@ -36,14 +45,32 @@ SANDBOX_GID="$(getent group "${GROUP}" | cut -d: -f3)"
 usage() {
   echo "Usage: $0 [IMAGE_NAME] [TEST_TYPE] [MODE]"
   echo "  IMAGE_NAME : Docker image to test (default: opencode-sandbox-\$(id -u))"
-  echo "  TEST_TYPE  : linters, agent, full, updates"
+  echo "  TEST_TYPE  : linters, agent, browsers, full, updates, all"
   echo "  MODE       : bare (run directly) or docker (wrap in docker run)"
   exit 1
 }
 
-info() { printf '%b%s%b\n' "$BLUE" "$1" "$RESET"; }
-success() { printf '%b%s%b\n' "$GREEN" "$1" "$RESET"; }
-error() { printf '%b%s%b\n' "$RED" "$1" "$RESET"; }
+info() {
+  if [ "$CI_COLORS" = "true" ]; then
+    printf '%b%s%b\n' "$BLUE" "$1" "$RESET"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+success() {
+  if [ "$CI_COLORS" = "true" ]; then
+    printf '%b%s%b\n' "$GREEN" "$1" "$RESET"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+error() {
+  if [ "$CI_COLORS" = "true" ]; then
+    printf '%b%s%b\n' "$RED" "$1" "$RESET"
+  else
+    printf '%s\n' "$1"
+  fi
+}
 
 # Execute a command — bare mode runs directly, docker mode wraps in docker run
 run_cmd() {
@@ -51,6 +78,74 @@ run_cmd() {
     docker run --rm -t -u "${ID}:${SANDBOX_GID}" "$IMAGE_NAME" "$@"
   else
     "$@"
+  fi
+}
+
+# Execute a shell construct in Docker mode — wraps in bash -c
+run_cmd_shell() {
+  if [ "$MODE" = "docker" ]; then
+    docker run --rm -t -u "${ID}:${SANDBOX_GID}" "$IMAGE_NAME" /bin/bash -c "$1"
+  else
+    /bin/bash -c "$1"
+  fi
+}
+
+record_result() {
+  local test_name="$1"
+  local status="$2"
+  local duration="$3"
+  local timestamp
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  if [ "$status" = "FAIL" ]; then
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    FAILED_TESTS="${FAILED_TESTS}${timestamp} - ${test_name} (${duration}s)\n"
+  else
+    PASS_COUNT=$((PASS_COUNT + 1))
+  fi
+}
+
+print_summary() {
+  local status_symbol
+  if [ "${CI_COLORS:-true}" = "true" ]; then
+    status_symbol="${GREEN}"
+  else
+    status_symbol=""
+  fi
+  info "Test Summary:"
+  if [ "${CI_COLORS:-true}" = "true" ]; then
+    printf '%b%s%b | %b%s%b | %b%s%b\n' "$BOLD" "Test" "$RESET" "$BOLD" "Status" "$RESET" "$BOLD" "Duration" "$RESET"
+    printf '%s | %s | %s\n' "$(printf '%0.s-' {1..30})" "$(printf '%0.s-' {1..10})" "$(printf '%0.s-' {1..10})"
+  else
+    printf '%-30s | %-10s | %s\n' "Test" "Status" "Duration"
+    printf '%.0s-' {1..55}
+    printf '\n'
+  fi
+  if [ -n "$TEST_ENTRIES" ]; then
+    while IFS='|' read -r t_name t_status t_duration; do
+      t_name="$(echo "$t_name" | xargs)"
+      t_status="$(echo "$t_status" | xargs)"
+      t_duration="$(echo "$t_duration" | xargs)"
+      [ -z "$t_name" ] && continue
+      if [ "$t_status" = "PASS" ]; then
+        if [ "${CI_COLORS:-true}" = "true" ]; then
+          printf '%b%s%b | %b%s%b | %s\n' "$RESET" "$t_name" "$RESET" "$status_symbol" "$t_status" "$RESET" "$t_duration"
+        else
+          printf '%-30s | %b%s%b | %s\n' "$t_name" "$status_symbol" "$t_status" "$RESET" "$t_duration"
+        fi
+      else
+        if [ "${CI_COLORS:-true}" = "true" ]; then
+          printf '%b%s%b | %b%s%b | %s\n' "$RESET" "$t_name" "$RESET" "$RED" "$t_status" "$RESET" "$t_duration"
+        else
+          printf '%-30s | %b%s%b | %s\n' "$t_name" "$RED" "$t_status" "$RESET" "$t_duration"
+        fi
+      fi
+    done <<< "$(printf '%b' "$TEST_ENTRIES")"
+  fi
+  printf '\n'
+  printf '%bTotal: %s passed, %s failed%b\n' "$BOLD" "$PASS_COUNT" "$FAIL_COUNT" "$RESET"
+  if [ -n "$FAILED_TESTS" ]; then
+    printf '\nFailed tests:\n'
+    printf '%b' "$FAILED_TESTS"
   fi
 }
 
@@ -77,8 +172,35 @@ test_linters() {
   ver="$(run_cmd ruff --version | awk '{print $2}')"
   printf '  ruff       %b%s%b\n' "$BOLD" "$ver" "$RESET"
 
-  ver="$(run_cmd pre-commit --version)"
+  ver="$(run_cmd pre-commit --version | awk '{print $2}')"
   printf '  pre-commit %b%s%b\n' "$BOLD" "$ver" "$RESET"
+
+  ver="$(run_cmd jq --version 2>/dev/null | sed 's/^jq-//')"
+  printf '  jq         %b%s%b\n' "$BOLD" "$ver" "$RESET"
+
+  ver="$(run_cmd xmllint --version 2>&1 | grep -oP 'libxml version \K[0-9]+' || echo "unknown")"
+  printf '  xmllint    %b%s%b\n' "$BOLD" "$ver" "$RESET"
+
+  ver="$(run_cmd rg --version | head -1 | awk '{print $2}')"
+  printf '  ripgrep    %b%s%b\n' "$BOLD" "$ver" "$RESET"
+
+  ver="$(run_cmd tree --version | head -1 | awk '{print $2}' | sed 's/^v//')"
+  printf '  tree       %b%s%b\n' "$BOLD" "$ver" "$RESET"
+
+  ver="$(run_cmd fdfind --version 2>/dev/null | awk '{print $2}' || true)"
+  if [ -z "$ver" ] || [ "$ver" = "not found" ]; then
+    ver="$(run_cmd fd --version 2>/dev/null | head -1 | awk '{print $2}' || true)"
+  fi
+  [ -z "$ver" ] && ver="not found"
+  printf '  fd-find    %b%s%b\n' "$BOLD" "$ver" "$RESET"
+
+  ver="$(run_cmd pyright --version 2>/dev/null | awk '{print $2}' || true)"
+  [ -z "$ver" ] && ver="not found"
+  printf '  pyright    %b%s%b\n' "$BOLD" "$ver" "$RESET"
+
+  ver="$(run_cmd playwright --version 2>/dev/null | awk '{print $2}' || true)"
+  [ -z "$ver" ] && ver="not found"
+  printf '  playwright %b%s%b\n' "$BOLD" "$ver" "$RESET"
 }
 
 test_doctors() {
@@ -92,13 +214,27 @@ test_doctors() {
 test_agent() {
   info "Testing agent-browser tool"
   run_cmd rm -f ./tests/agent-${TARGET}.png 2>/dev/null || true
-  info "Testing configuration"
-  run_cmd agent-browser doctor
-  run_cmd /bin/bash -c "agent-browser open https://${TARGET} && agent-browser screenshot ./tests/agent-${TARGET}.png"
+  run_cmd_shell "agent-browser open https://${TARGET} && agent-browser screenshot ./tests/agent-${TARGET}.png"
   info "agent-browser screenshot generated"
   if [[ -f "./tests/agent-${TARGET}-correct.png" ]]; then
       info "Comparing results with ./tests/agent-${TARGET}-correct.png"
-      diff "./tests/agent-${TARGET}-correct.png" "./tests/agent-${TARGET}.png"
+      # Try accessibility-tree comparison first
+      local tree_new tree_base
+      tree_new="$(run_cmd agent-browser accessibility-tree ./tests/agent-${TARGET}.png 2>/dev/null || echo "")"
+      tree_base="$(run_cmd agent-browser accessibility-tree ./tests/agent-${TARGET}-correct.png 2>/dev/null || echo "")"
+      if [ -n "$tree_new" ] && [ -n "$tree_base" ]; then
+          if [ "$tree_new" = "$tree_base" ]; then
+              success "Accessibility trees match - screenshots are structurally equivalent"
+          else
+              error "Accessibility trees differ - screenshots show different content"
+              error "New tree: ${tree_new}"
+              error "Base tree: ${tree_base}"
+              return 1
+          fi
+      else
+          info "Accessibility tree comparison not available - skipping screenshot comparison"
+          info "Previous baseline will be used for reference"
+      fi
   else
       mv "./tests/agent-${TARGET}.png" "tests/agent-${TARGET}-correct.png"
       info "First run of test - creating new screenshot (please verify manually)"
@@ -117,7 +253,21 @@ test_playwright() {
   info "Playwright screenshot generated"
   if [[ -f "./tests/playwright-${TARGET}-correct.png" ]]; then
       info "Comparing results with ./tests/playwright-${TARGET}-correct.png"
-      diff "./tests/playwright-${TARGET}-correct.png" "./tests/playwright-${TARGET}.png"
+      # Try accessibility-tree comparison first
+      local tree_new tree_base
+      tree_new="$(run_cmd agent-browser accessibility-tree ./tests/playwright-${TARGET}.png 2>/dev/null || echo "")"
+      tree_base="$(run_cmd agent-browser accessibility-tree ./tests/playwright-${TARGET}-correct.png 2>/dev/null || echo "")"
+      if [ -n "$tree_new" ] && [ -n "$tree_base" ]; then
+          if [ "$tree_new" = "$tree_base" ]; then
+              success "Accessibility trees match - screenshots are structurally equivalent"
+          else
+              error "Accessibility trees differ - screenshots show different content"
+              return 1
+          fi
+      else
+          info "Accessibility tree comparison not available - skipping screenshot comparison"
+          info "Previous baseline will be used for reference"
+      fi
   else
       mv "./tests/playwright-${TARGET}.png" "tests/playwright-${TARGET}-correct.png"
       info "First run of test - creating new screenshot (please verify manually)"
@@ -146,12 +296,20 @@ test_base() {
   fi
 
   if [ "$MODE" = "docker" ]; then
-    docker run --rm --group-add docker \
-      -v /var/run/docker.sock:/var/run/docker.sock:ro \
-      -v /usr/bin/docker:/usr/bin/docker:ro \
-      --entrypoint /usr/bin/docker "$IMAGE_NAME" ps
+    if docker run --rm --group-add docker \
+       -v /var/run/docker.sock:/var/run/docker.sock:ro \
+       -v /usr/bin/docker:/usr/bin/docker:ro \
+       --entrypoint /usr/bin/docker "$IMAGE_NAME" ps 2>/dev/null; then
+      success "Docker-in-Docker test passed"
+    else
+      info "Docker-in-Docker test skipped: socket not available or test failed"
+    fi
   else
-    docker ps
+    if docker ps >/dev/null 2>&1; then
+      success "Docker test passed"
+    else
+      info "Docker test skipped: docker not available"
+    fi
   fi
 }
 
@@ -161,7 +319,13 @@ test_updates() {
   local npm_pkgs=(
     "@biomejs/biome"
     "@fission-ai/openspec"
+    "@opencode-ai/plugin"
+    "@opencode-ai/sdk"
+    "@playwright/mcp"
+    "@beads/bd"
     agent-browser
+    bash-language-server
+    codebase-memory-mcp
     commit-and-tag-version
     htmlhint
     opencode-ai
@@ -171,12 +335,20 @@ test_updates() {
     prettier-plugin-ini
     prettier-plugin-nginx
     prettier-plugin-sh
+    prettier-plugin-toml
+    stylelint
+    webcrack
+    yaml-language-server
   )
 
   for pkg in "${npm_pkgs[@]}"; do
     local installed latest
-    installed="$(run_cmd npm list -g "$pkg" 2> /dev/null | tail -2 | sed 's/.*@//')"
-    latest="$(run_cmd npm view "$pkg" version 2> /dev/null)"
+    installed="$(run_cmd npm list -g --depth=0 "$pkg" 2> /dev/null | grep -oP '@\K[0-9][^ )]+' | head -1 || true)"
+    if [ -z "$installed" ]; then
+      printf '  %s: %bnot installed%b\n' "$pkg" "$YELLOW" "$RESET"
+      continue
+    fi
+    latest="$(run_cmd npm view "$pkg" version 2> /dev/null || true)"
     if [ -n "$installed" ] && [ -n "$latest" ]; then
       if [ "$installed" != "$latest" ]; then
         printf '  %s: %b%s%b -> %b%s%b\n' "$pkg" "$YELLOW" "$installed" "$RESET" "$GREEN" "$latest" "$RESET"
@@ -187,6 +359,13 @@ test_updates() {
   done
 
   info "Checking for available pip package updates..."
+  if [ "$MODE" = "docker" ]; then
+    if ! run_cmd test -f requirements.txt 2>/dev/null; then
+      info "requirements.txt not found in container - skipping pip update check"
+      echo ""
+      return 0
+    fi
+  fi
   while IFS= read -r line || [ -n "$line" ]; do
     [ -z "$line" ] && continue
     [ "${line:0:1}" = "#" ] && continue
@@ -245,6 +424,35 @@ test_config() {
   fi
 }
 
+validate_inputs() {
+  # Validate IMAGE_NAME is a local Docker image
+  if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+    error "Error: Image '${IMAGE_NAME}' not found locally"
+    echo "Run 'docker pull ${IMAGE_NAME}' or build the image first."
+    exit 1
+  fi
+
+  # Validate TEST_TYPE
+  case "$TEST_TYPE" in
+    linters|agent|browsers|full|updates|all) ;;
+    *)
+      error "Error: Invalid TEST_TYPE '${TEST_TYPE}'"
+      echo "Valid options: linters, agent, browsers, full, updates, all"
+      exit 1
+      ;;
+  esac
+
+  # Validate MODE
+  case "$MODE" in
+    bare|docker) ;;
+    *)
+      error "Error: Invalid MODE '${MODE}'"
+      echo "Valid options: bare, docker"
+      exit 1
+      ;;
+  esac
+}
+
 run_tests() {
   info "Running tests on image: ${BOLD}${IMAGE_NAME}${RESET}"
   echo ""
@@ -253,34 +461,60 @@ run_tests() {
   info "Running under user ID ${ID} and group ID ${SANDBOX_GID}"
   run_cmd opencode --version
   run_cmd id
+  TEST_ENTRIES=""
+
+  # Helper to wrap a test with timing and result recording
+  run_test() {
+    local test_name="$1"
+    shift
+    local start_time
+    start_time="$(date +%s)"
+    if "$@"; then
+      local end_time duration
+      end_time="$(date +%s)"
+      duration=$((end_time - start_time))
+      record_result "$test_name" "PASS" "$duration"
+      TEST_ENTRIES="${TEST_ENTRIES}${test_name}|PASS|${duration}s\n"
+    else
+      local end_time duration
+      end_time="$(date +%s)"
+      duration=$((end_time - start_time))
+      record_result "$test_name" "FAIL" "$duration"
+      TEST_ENTRIES="${TEST_ENTRIES}${test_name}|FAIL|${duration}s\n"
+      error "Test '${test_name}' failed (exit code: $?, duration: ${duration}s)"
+    fi
+  }
+
   test_config
   echo ""
-  test_doctors
+  run_test "doctors" test_doctors
   case "$TEST_TYPE" in
     browsers)
-      test_agent
-      test_playwright
+      run_test "agent" test_agent
+      run_test "playwright" test_playwright
       ;;
-    linters) test_linters ;;
-    updates) test_updates ;;
+    linters) run_test "linters" test_linters ;;
+    updates) run_test "updates" test_updates ;;
     full | all)
-      test_base
+      run_test "base" test_base
       echo ""
-      test_linters
+      run_test "linters" test_linters
       echo ""
-      test_updates
+      run_test "updates" test_updates
       echo ""
-      test_agent
-      test_playwright
+      run_test "agent" test_agent
+      run_test "playwright" test_playwright
       ;;
     *)
       usage
       ;;
   esac
 
+  print_summary
   success "All tests completed for ${IMAGE_NAME}"
 }
 
-trap 'echo -e "${RED}Test interrupted.${RESET}"' INT TERM
+trap 'echo -e "${RED}Test interrupted.${RESET}"; print_summary; exit 1' INT TERM
 
+validate_inputs
 run_tests

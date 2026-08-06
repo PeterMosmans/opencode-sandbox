@@ -4,6 +4,8 @@
 # Copyright (C) 2026 Peter Mosmans [Go Forward]
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+# shellcheck disable=SC1073,SC1065,SC1064,SC1072
+
 # Runs OpenCode sandboxed
 # In order to do this, the following files/directories are shared READ-ONLY:
 # ~/.config/opencode - contains OpenCode configuration (set using OPENCODE_CONFIG_DIR)
@@ -13,6 +15,8 @@
 # .memory/codebase-memory-mcp - (set using CBM_CACHE_DIR)
 # .memory/opencode - OpenCode session database and prompt history
 # .memory/engram - Engram
+
+# === Configuration ===
 
 # Enforce Bash as shell, as that makes it easier to script
 SHELL := /bin/bash
@@ -34,36 +38,51 @@ else
 SED_I := sed -i
 endif
 
-# Use current directory as root for the sandbox
-PROJECT_NAME := $(notdir $(CURDIR))
-IMAGE_NAME := opencode-sandbox-$(shell id -u)
-TEST_IMAGE_NAME := $(IMAGE_NAME)-test
-PROJECT_ROOT ?= $(CURDIR)
-
-# Directory where the Makefile lives (for git operations)
-MAKE_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
-# Port on which to test https:// connection
-HOST_PORT ?= 8000
-
 # Source .env for version overrides (if it exists)
 ifneq ($(wildcard .env),)
 include .env
 endif
+
+# Project configuration
+PROJECT_NAME := $(notdir $(CURDIR))
+IMAGE_NAME := opencode-sandbox-$(shell id -u)
+TEST_IMAGE_NAME := $(IMAGE_NAME)-test
+PROJECT_ROOT ?= $(CURDIR)
+CUSTOM_IMAGE_NAME ?= sandbox-opencode-custom-$(shell id -u)
+
+# Directory where the Makefile lives (for git operations)
+MAKE_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
+
+# Port on which to test https:// connection
+HOST_PORT ?= 8000
 
 # OpenCode version is derived from the opencode-ai dependency in package.json.
 # Override via .env (OPENCODE_VERSION=...) if needed.
 OPENCODE_VERSION ?= $(shell node -e "console.log(require('./package.json').dependencies['opencode-ai'])")
 OPENCODE_SERVER_USERNAME ?= $(shell id -u --name)
 OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
+
 # Image tag defaults to "latest" for day-to-day builds. Override to tag
 # with the release version or any custom tag:
 #	make build					   → builds & tags as "latest"
 #	make build IMAGE_TAG=$(OPENCODE_VERSION) → tags with the release version
 #	make build IMAGE_TAG=abc1234   → tags with a commit/sha
 IMAGE_TAG ?= latest
+
 # Group for sandboxed runs
 GROUP ?= $(shell id -gn)
-SANDBOX_GID := $(shell getent group $(GROUP) | cut -d: -f3)
+
+# HOST_LEMONADE maps a hostname to an IP for local development
+HOST_LEMONADE ?=
+
+# Server configuration
+SERVER_PORT ?= 5000
+
+# Test configuration
+TYPE ?= full
+
+# === Helpers ===
+
 # ANSI color codes (escaped for Make compatibility)
 BOLD   := \033[1m
 BLUE   := \033[1;34m
@@ -72,56 +91,62 @@ RED	   := \033[0;31m
 YELLOW := \033[0;33m
 RESET  := \033[0m
 
-# Colorized message helper
+# Colorized message helpers
 define color_msg
-	@printf '%b%b%b\n' '$(BLUE)' '$1' '$(RESET)'
+printf '%b%b%b\n' '$(BLUE)' '$1' '$(RESET)'
 endef
 
 define bold_msg
-	@printf '%b%b%b\n' '$(BOLD)' '$1' '$(RESET)'
+printf '%b%b%b\n' '$(BOLD)' '$1' '$(RESET)'
 endef
 
 define status_msg
-	@printf '%b%s %s%b\n' '$(GREEN)' '$1:' '$(BOLD)' '$(RESET)'
+printf '%b%s%b\n' '$(GREEN)' '$1:' '$(RESET)'
 endef
 
-# Help first: This will be the default target
-help: # Display useful commands
-	@grep -E '^[a-zA-Z_-]+:.*\s+#\s' Makefile | \
-	awk 'BEGIN {FS = ":.*?# "}; {printf "\033[1;33m%-20s\033[0m %s\n", $$1, $$2}'
+define error_msg
+printf '%b%s%b\n' '$(RED)' '$1' '$(RESET)'
+endef
 
-.PHONY: preflight preflight-run preflight-elevated build run latest elevated test clean image custom-image test-image test-run run-tests server package update-versions check-versions tag-version
+# Display HOST_LEMONADE mapping
+define show_lemonade
+if [ -n "$(HOST_LEMONADE)" ]; then \
+printf '%b%s%b\n' '$(GREEN)' '  -> $(LEMONADE_HOST) mapped to $(HOST_LEMONADE)' '$(RESET)'; \
+fi
+endef
 
-preflight: # Check prerequisites before building
-	@printf '%b%s%b\n' '$(BOLD)' 'Running preflight checks...' '$(RESET)'
-	@command -v docker >/dev/null 2>&1 || { printf '%b%s%b\n' '$(RED)' 'ERROR: docker is not installed' '$(RESET)'; exit 1; }
-	@docker info >/dev/null 2>&1 || { printf '%b%s%b\n' '$(RED)' 'ERROR: docker daemon is not running' '$(RESET)'; exit 1; }
-	@test -f Dockerfile || { printf '%b%s%b\n' '$(RED)' "ERROR: Dockerfile not found in $(CURDIR)" '$(RESET)'; exit 1; }
-	@test -d ~/.config/opencode || { printf '%b%s%b\n' '$(RED)' 'ERROR: ~/.config/opencode directory not found (required for run)' '$(RESET)'; exit 1; }
-	@test -f ~/.local/share/opencode/auth.json || { printf '%b%s%b\n' '$(RED)' 'ERROR: ~/.local/share/opencode/auth.json not found (required for run/elevated)' '$(RESET)'; exit 1; }
-	@printf '%b%s%b\n' '$(GREEN)' 'All preflight checks passed.' '$(RESET)'
+# Display image tag information (first argument = tag)
+define show_image_tag
+printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(IMAGE_NAME):" "$(1)"
+endef
 
-preflight-run: # Check prerequisites for run and elevated commands
-	@printf '%b%s%b\n' '$(BOLD)' 'Running preflight checks for run...' '$(RESET)'
-	@test "$(CURDIR)" != "$(HOME)" || { printf '%b%s%b\n' '$(RED)' 'ERROR: Cannot run from home directory ($(CURDIR)) — this would map your entire home into the sandbox' '$(RESET)'; exit 1; }
-	@test -d ~/.config/opencode || { printf '%b%s%b\n' '$(RED)' 'ERROR: ~/.config/opencode directory not found (required for run/)' '$(RESET)'; exit 1; }
-	@test -f ~/.local/share/opencode/auth.json || { printf '%b%s%b\n' '$(RED)' 'ERROR: ~/.local/share/opencode/auth.json not found (required for run)' '$(RESET)'; exit 1; }
-	@test -f ~/.gitconfig || { printf '%b%s%b\n' '$(RED)' 'ERROR: ~/.gitconfig not found (required for run)' '$(RESET)'; exit 1; }
-	@mkdir -p .memory/{codebase-memory-mcp,engram,opencode} 2>/dev/null; \
-	touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
-	@printf '%b%s%b\n' '$(GREEN)' 'All run/elevated preflight checks passed.' '$(RESET)'
+# === Derived Variables ===
 
-preflight-elevated: preflight-run # Additional checks for elevated command
-	@printf '%b%s%b\n' '$(BOLD)' 'Running preflight checks for elevated...' '$(RESET)'
-ifeq ($(IS_DARWIN),1)
-	@test -f /usr/local/bin/docker || { printf '%b%s%b\n' '$(RED)' 'ERROR: /usr/local/bin/docker not found (Docker Desktop required for elevated)' '$(RESET)'; exit 1; }
-else
-	@test -f /usr/bin/docker || { printf '%b%s%b\n' '$(RED)' 'ERROR: /usr/bin/docker not found (required for elevated)' '$(RESET)'; exit 1; }
-	@test -d /usr/libexec/docker || { printf '%b%s%b\n' '$(RED)' 'ERROR: /usr/libexec/docker directory not found (required for elevated)' '$(RESET)'; exit 1; }
-endif
-	@printf '%b%s%b\n' '$(GREEN)' 'All elevated preflight checks passed.' '$(RESET)'
+# Group ID for sandboxed runs
+SANDBOX_GID := $(shell getent group $(GROUP) | cut -d: -f3)
 
-build: preflight image # Build a fresh OpenCode sandbox (with preflight check)
+# Base mounts always included in sandbox runs
+SANDBOX_BASE_MOUNTS := -u $$(id -u):$(SANDBOX_GID) \
+	-e OPENCODE_CONFIG_DIR=/home/node/.config/opencode \
+	-v $(PROJECT_ROOT)/.memory/codebase-memory-mcp/:/home/node/codebase-memory-mcp/:rw \
+	-v $(PROJECT_ROOT)/.memory/engram/:/home/node/.engram/:rw \
+	-v $(PROJECT_ROOT)/.memory/opencode/prompt-history.jsonl:/home/node/.local/state/opencode/prompt-history.jsonl:rw \
+	-v $(PROJECT_ROOT)/.memory/opencode/opencode.db:/home/node/.local/share/opencode/opencode.db:rw \
+	-v $(PROJECT_ROOT)/.memory/opencode/opencode.db-shm:/home/node/.local/share/opencode/opencode.db-shm:rw \
+	-v $(PROJECT_ROOT)/.memory/opencode/opencode.db-wal:/home/node/.local/share/opencode/opencode.db-wal:rw \
+	-v $(PROJECT_ROOT):/$(PROJECT_NAME):rw \
+	-v ~/.config/opencode:/home/node/.config/opencode:ro \
+	-w /$(PROJECT_NAME)
+
+# Optional conditional mounts
+SANDBOX_OPTIONAL_MOUNTS := \
+	$(if $(HOST_LEMONADE),--add-host $(LEMONADE_HOST):$(HOST_LEMONADE)) \
+	$(if $(wildcard ~/.gitconfig),-v ~/.gitconfig:/home/node/.gitconfig:ro) \
+	$(if $(wildcard ~/.agent-browser/config.json),-v ~/.agent-browser/config.json:/home/node/.agent-browser/config.json:ro) \
+	$(if $(wildcard ~/.local/share/opencode/auth.json),-v ~/.local/share/opencode/auth.json:/home/node/.local/share/opencode/auth.json:ro)
+
+# Final SANDBOX_MOUNTS composed of base + optional
+SANDBOX_MOUNTS := $(SANDBOX_BASE_MOUNTS) $(SANDBOX_OPTIONAL_MOUNTS)
 
 # Shared docker build arguments (non-npm packages and runtime config only)
 DOCKER_BUILD_ARGS := \
@@ -130,77 +155,90 @@ DOCKER_BUILD_ARGS := \
 	--build-arg USER_ID=$$(id -u) \
 	--build-arg GROUP_ID=$(SANDBOX_GID)
 
+# Shared docker image removal pattern
+IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
+
+# Files included in package archive
+PACKED_FILES := env.example Dockerfile .dockerignore Makefile test.sh README.md package.json requirements.txt
+
+# === .PHONY ===
+.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash test clean image custom-image test-image test-run run-tests server package update-versions check-versions tag-version validate test-makefile
+
+# === Building ===
+
+# Help first: This will be the default target
+help: # Display useful commands
+	@grep -E '^[a-zA-Z_-]+:.*\s+#\s' Makefile | \
+	awk 'BEGIN {FS = ":.*?# "}; {printf "\033[1;33m%-20s\033[0m %s\n", $$1, $$2}'
+
+preflight: # Check prerequisites before building
+	@$(call bold_msg,Running preflight checks...)
+	@command -v docker >/dev/null 2>&1 || { $(call error_msg,ERROR: docker is not installed); exit 1; }
+	@docker info >/dev/null 2>&1 || { $(call error_msg,ERROR: docker daemon is not running); exit 1; }
+	@test -f Dockerfile || { $(call error_msg,ERROR: Dockerfile not found in $(CURDIR)); exit 1; }
+	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run)); exit 1; }
+	@test -f ~/.local/share/opencode/auth.json || { $(call error_msg,ERROR: ~/.local/share/opencode/auth.json not found (required for run/elevated)); exit 1; }
+	@$(call status_msg,All preflight checks passed)
+
+preflight-run: # Check prerequisites for run and elevated commands
+	@$(call bold_msg,Running preflight checks for run...)
+	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR)) — this would map your entire home into the sandbox); exit 1; }
+	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run/)); exit 1; }
+	@test -f ~/.local/share/opencode/auth.json || { $(call error_msg,ERROR: ~/.local/share/opencode/auth.json not found (required for run)); exit 1; }
+	@test -f ~/.gitconfig || { $(call error_msg,ERROR: ~/.gitconfig not found (required for run)); exit 1; }
+	@mkdir -p .memory/{codebase-memory-mcp,engram,opencode} 2>/dev/null; \
+	touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
+	@$(call status_msg,All run/elevated preflight checks passed)
+
+preflight-elevated: preflight-run # Additional checks for elevated command
+	@$(call bold_msg,Running preflight checks for elevated...)
+ifeq ($(IS_DARWIN),1)
+	@test -f /usr/local/bin/docker || { $(call error_msg,ERROR: /usr/local/bin/docker not found (Docker Desktop required for elevated)); exit 1; }
+else
+	@test -f /usr/bin/docker || { $(call error_msg,ERROR: /usr/bin/docker not found (required for elevated)); exit 1; }
+	@test -d /usr/libexec/docker || { $(call error_msg,ERROR: /usr/libexec/docker directory not found (required for elevated)); exit 1; }
+endif
+	@$(call status_msg,All elevated preflight checks passed)
+
+build: preflight image # Build a fresh OpenCode sandbox (with preflight check)
+
 image: # Build a fresh OpenCode sandbox
-	@printf '%b%s%b\n' '$(BLUE)' 'Building image: $(IMAGE_NAME)...' '$(RESET)'
+	@$(call color_msg,Building image: $(IMAGE_NAME)...)
 	docker build . -t $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS)
 
 tag-version: # Tag the latest image with the opencode-ai version from package.json
 	@docker tag $(IMAGE_NAME):latest $(IMAGE_NAME):$(OPENCODE_VERSION)
-	@printf '%b%s%b\n' '$(GREEN)' "Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION)" '$(RESET)'
-
-CUSTOM_IMAGE_NAME ?= sandbox-opencode-custom-$(shell id -u)
-
-SERVER_PORT ?= 5000
+	@printf '%b%s%b: %s\n' '$(GREEN)' 'Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION)' '$(RESET)'
 
 custom-image: # Build image from alternative Dockerfile with different name
-	@test -f Dockerfile.custom || { printf '%b%s%b\n' '$(RED)' 'ERROR: Dockerfile.custom not found' '$(RESET)'; exit 1; }
-	@printf '%b%s%b\n' '$(BLUE)' "Building image: $(CUSTOM_IMAGE_NAME)..." '$(RESET)'
+	@test -f Dockerfile.custom || { $(call error_msg,ERROR: Dockerfile.custom not found); exit 1; }
+	@$(call color_msg,Building image: $(CUSTOM_IMAGE_NAME)...)
 	@docker build -f Dockerfile.custom . -t $(CUSTOM_IMAGE_NAME) -t $(CUSTOM_IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS)
 
 test-image: preflight # Build a test OpenCode sandbox image
-	@printf '%b%s%b\n' '$(BLUE)' "Building test image: $(TEST_IMAGE_NAME)..." '$(RESET)'
+	@$(call color_msg,Building test image: $(TEST_IMAGE_NAME)...)
 	@docker build . -t $(TEST_IMAGE_NAME) -t $(TEST_IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS) --progress=plain
 
-HOST_LEMONADE ?=
+# === Running ===
 
-# Shared docker run options for standard sandbox containers
-# /home/node/.local/state/opencode/prompt-history.jsonl:rw
-# -v $(PROJECT_ROOT)/.opencode/opencode.db:/home/node/.local/share/opencode/opencode.db
-# Conditionally mount files only if they exist
-# /home/node/codebase-memory-mcp/ For codebase meory:
-# -v $(PROJECT_ROOT)/.cache:/home/node/.cache/opencode/:rw 
-SANDBOX_MOUNTS := $(shell \
-  m="-u $$(id -u):$(SANDBOX_GID) \
--e OPENCODE_CONFIG_DIR=/home/node/.config/opencode \
--v $(PROJECT_ROOT)/.memory/codebase-memory-mcp/:/home/node/codebase-memory-mcp/:rw \
--v $(PROJECT_ROOT)/.memory/engram/:/home/node/.engram/:rw \
--v $(PROJECT_ROOT)/.memory/opencode/prompt-history.jsonl:/home/node/.local/state/opencode/prompt-history.jsonl:rw \
--v $(PROJECT_ROOT)/.memory/opencode/opencode.db:/home/node/.local/share/opencode/opencode.db:rw \
--v $(PROJECT_ROOT)/.memory/opencode/opencode.db-shm:/home/node/.local/share/opencode/opencode.db-shm:rw \
--v $(PROJECT_ROOT)/.memory/opencode/opencode.db-wal:/home/node/.local/share/opencode/opencode.db-wal:rw \
--v $(PROJECT_ROOT):/$(PROJECT_NAME):rw \
--v ~/.config/opencode:/home/node/.config/opencode:ro \
- -w /$(PROJECT_NAME) \
-"; \
-  [ -n "$(HOST_LEMONADE)" ] && m="$$m --add-host $(LEMONADE_HOST):$(HOST_LEMONADE)"; \
-  [ -f ~/.gitconfig ] && m="$$m -v ~/.gitconfig:/home/node/.gitconfig:ro"; \
-  [ -f ~/.agent-browser/config.json ] && m="$$m -v ~/.agent-browser/config.json:/home/node/.agent-browser/config.json:ro"; \
-  [ -f ~/.local/share/opencode/auth.json ] && m="$$m -v ~/.local/share/opencode/auth.json:/home/node/.local/share/opencode/auth.json:ro" \
-  echo "$$m")
+TAG ?= $(IMAGE_TAG)
 
 run: preflight-run # Run OpenCode sandboxed in the current directory
-	@printf '%b%s%b\n' '$(BLUE)' 'Running sandbox image:' '$(RESET)'
-	@printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(IMAGE_NAME):" "$(IMAGE_TAG)"
-	@if [ -n "$(HOST_LEMONADE)" ]; then \
-		printf '%b%s%b\n' '$(GREEN)' "  -> $(LEMONADE_HOST) mapped to $(HOST_LEMONADE)" '$(RESET)'; \
-	fi
-	@docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):$(IMAGE_TAG)
+	@$(call color_msg,Running sandbox image:)
+	@$(call show_image_tag,$(TAG))
+	@$(call show_lemonade)
+	@docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):$(TAG)
 
-latest: preflight-run # Run OpenCode sandboxed in the current directory
-	@printf '%b%s%b\n' '$(BLUE)' 'Running sandbox image:' '$(RESET)'
-	@printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(IMAGE_NAME):" "$(IMAGE_TAG)"
-	@if [ -n "$(HOST_LEMONADE)" ]; then \
-		printf '%b%s%b\n' '$(GREEN)' "  -> $(LEMONADE_HOST) mapped to $(HOST_LEMONADE)" '$(RESET)'; \
-	fi
-	@docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest
+latest: TAG = latest
+latest: run # Run OpenCode sandboxed with latest tag
 
 bash: # Run a bash shell
 	docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest /bin/bash
 
 server: preflight-run # Run OpenCode server in the current directory
-	@test -n "$(OPENCODE_SERVER_PASSWORD)" || { printf '%b%s%b\n' '$(RED)' 'ERROR: OPENCODE_SERVER_PASSWORD must be set' '$(RESET)'; exit 1; }
-	@printf '%b%s%b\n' '$(BLUE)' 'Running server in $(PROJECT_NAME) with username $(OPENCODE_SERVER_USERNAME) and password $(OPENCODE_SERVER_PASSWORD) on port $(SERVER_PORT):' '$(RESET)'
-	@printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(IMAGE_NAME):" "$(IMAGE_TAG)"
+	@test -n "$(OPENCODE_SERVER_PASSWORD)" || { $(call error_msg,ERROR: OPENCODE_SERVER_PASSWORD must be set); exit 1; }
+	@$(call color_msg,Running server in $(PROJECT_NAME) with username $(OPENCODE_SERVER_USERNAME) and password $(OPENCODE_SERVER_PASSWORD) on port $(SERVER_PORT):)
+	@$(call show_image_tag,$(IMAGE_TAG))
 	@docker run --init --rm -it \
 		-e OPENCODE_SERVER_USERNAME=$(OPENCODE_SERVER_USERNAME) \
 		-e OPENCODE_SERVER_PASSWORD=$(OPENCODE_SERVER_PASSWORD) \
@@ -210,14 +248,12 @@ server: preflight-run # Run OpenCode server in the current directory
 		/bin/bash -c "cd /$(PROJECT_NAME) && opencode serve --port $(SERVER_PORT) --hostname 0.0.0.0"
 
 test-run: preflight-run # Run OpenCode test sandboxed in the current directory
-	@printf '%b%s%b\n' '$(BLUE)' 'Running test image:' '$(RESET)'
+	@$(call color_msg,Running test image:)
 	@printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(TEST_IMAGE_NAME):" "$(IMAGE_TAG)"
 	@docker run --rm -it $(SANDBOX_MOUNTS) $(TEST_IMAGE_NAME)
 
 elevated: preflight-elevated # Run OpenCode sandboxed with Docker access
-	@if [ -n "$(HOST_LEMONADE)" ]; then \
-		printf '%b%s%b\n' '$(GREEN)' "  -> $(LEMONADE_HOST) mapped to $(HOST_LEMONADE)" '$(RESET)'; \
-	fi
+	@$(call show_lemonade)
 	@docker run --rm -it \
 		$(DOCKER_ELEVATED_FLAGS) \
 		$(SANDBOX_MOUNTS) \
@@ -232,10 +268,10 @@ elevated: preflight-elevated # Run OpenCode sandboxed with Docker access
 # Run tests locally:        ./test.sh [IMAGE_NAME] [TYPE]
 
 run-tests: preflight-run # Run tests inside Docker container (make run-tests IMAGE=my-image TYPE=full)
-	@test -x test.sh || { printf '%b%s%b\n' '$(RED)' 'test.sh not found or not executable' '$(RESET)'; exit 1; }
-	@printf '%b%s%b\n' '$(BLUE)' "Running tests inside Docker container..." '$(RESET)'
-	@printf '%b%s%b\n' '$(BLUE)' "  Image: ${IMAGE:-$(IMAGE_NAME)}" '$(RESET)'
-	@printf '%b%s%b\n' '$(BLUE)' "  Type:  ${TYPE:-full}" '$(RESET)'
+	@test -x test.sh || { $(call error_msg,test.sh not found or not executable); exit 1; }
+	@$(call color_msg,Running tests inside Docker container...)
+	@$(call color_msg,  Image: $(IMAGE_NAME))
+	@$(call color_msg,  Type:  $(TYPE))
 	@mkdir -p tests/ 2>/dev/null
 	@docker run --rm -it \
 		$(SANDBOX_MOUNTS) \
@@ -246,8 +282,14 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 		$(IMAGE_NAME) \
 		/bin/bash /home/node/test.sh "${IMAGE:-$(IMAGE_NAME)}" "${TYPE:-full}" bare
 
-# Shared docker image removal pattern
-IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
+# === Testing ===
+
+validate: # Run all Makefile validation tests
+	@bash tests/makefile-tests.sh
+
+test-makefile: validate # Alias for validate target
+
+# === Maintenance ===
 
 clean: remove # Remove sandbox Docker images
 	@docker image prune -f
@@ -257,106 +299,25 @@ remove: # Remove all sandbox image variants (tags and untagged)
 		docker rmi --force "$$img" 2>/dev/null || true; \
 	done
 
-PACKED_FILES := env.example Dockerfile .dockerignore Makefile test.sh README.md package.json requirements.txt
-
 package: # Create a zip archive with all files needed to build and test the image, named with version tag
 	@zip -q "sandbox-$(IMAGE_TAG).zip" $(PACKED_FILES)
 	@printf '%b%s%b: %s\n' '$(GREEN)' 'Created' '$(RESET)' '"sandbox-$(IMAGE_TAG).zip"'
 
-# Update npm + pip package versions by fetching latest from registries
+# === Version Management ===
+
 update-versions: # Update package.json + requirements.txt with latest versions
 	@echo "Fetching latest versions from npm and updating package.json..."
-	@node -e "\
-	const pkg = require('./package.json'); \
-	const deps = pkg.dependencies; \
-	const packages = Object.keys(deps); \
-	const npm = require('child_process').execSync; \
-	let changed = 0; \
-	packages.forEach(pkgName => { \
-		try { \
-			const latest = npm('npm view ' + pkgName + ' version', {encoding: 'utf8'}).trim(); \
-			const current = deps[pkgName]; \
-			if (current === 'latest') { \
-				console.log(pkgName + ': latest (skipping)'); \
-			} else if (current !== latest) { \
-				deps[pkgName] = latest; \
-				console.log('Updated: ' + pkgName + ' -> ' + latest); \
-				changed++; \
-			} else { \
-				console.log(pkgName + ': up to date (' + current + ')'); \
-			} \
-		} catch(e) { \
-			console.log(pkgName + ': could not fetch latest version (skipping)'); \
-		} \
-	}); \
-	if (changed > 0) { \
-		pkg.dependencies = deps; \
-		const fs = require('fs'); \
-		fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n'); \
-		console.log('Done. package.json updated.'); \
-	} else { \
-		console.log('No npm packages need updating.'); \
-	} \
-	"
+	@node scripts/update-versions.js
 	@echo ""
 	@echo "Fetching latest versions from PyPI and updating requirements.txt..."
-	@changed=0; \
-	while IFS= read -r line || [ -n "$$line" ]; do \
-		[ -z "$$line" ] && continue; \
-		[ "$${line:0:1}" = "#" ] && continue; \
-		pkg_name=$$(echo "$$line" | cut -d= -f1); \
-		pkg_version=$$(echo "$$line" | cut -d= -f3); \
-		latest=$$(pip index versions "$$pkg_name" 2>/dev/null | head -1 | sed 's/.*(\(.*\))/\1/'); \
-		if [ -n "$$latest" ]; then \
-			if [ "$$pkg_version" != "$$latest" ]; then \
-				echo "Updated: $$pkg_name == $$pkg_version -> $$latest"; \
-				sed -i "s/^$$pkg_name==.*/$$pkg_name==$$latest/" requirements.txt; \
-				changed=$$((changed + 1)); \
-			else \
-				echo "$$pkg_name: up to date ($$pkg_version)"; \
-			fi; \
-		else \
-			echo "Skipped: $$pkg_name (could not fetch version)"; \
-		fi; \
-	done < requirements.txt; \
-	if [ "$$changed" -gt 0 ]; then \
-		echo "Done. requirements.txt updated."; \
-	else \
-		echo "No pip packages need updating."; \
-	fi
+	@bash scripts/update-pip-versions.sh
 
-# Check if npm + pip package versions are up to date
 check-versions: # Compare package.json + requirements.txt versions against registries
 	@UP_TO_DATE=0 && \
 	OUTDATED=0 && \
 	echo "Checking package.json versions against npm..." && \
 	_tmp=$$(mktemp) && \
-	node -e "\
-	const pkg = require('./package.json'); \
-	const deps = pkg.dependencies; \
-	const packages = Object.keys(deps); \
-	const npm = require('child_process').execSync; \
-	let upToDate = 0; \
-	let outdated = 0; \
-	packages.forEach(pkgName => { \
-		try { \
-			const latest = npm('npm view ' + pkgName + ' version', {encoding: 'utf8'}).trim(); \
-			const current = deps[pkgName]; \
-			if (current === 'latest') { \
-				console.log(pkgName + ': latest (skipping)'); \
-			} else if (current !== latest) { \
-				console.log(pkgName + ': ' + current + ' -> ' + latest); \
-				outdated++; \
-			} else { \
-				console.log(pkgName + ': up to date (' + current + ')'); \
-				upToDate++; \
-			} \
-		} catch(e) { \
-			console.log(pkgName + ': could not fetch latest version (skipping)'); \
-		} \
-	}); \
-	console.log(upToDate + ' ' + outdated); \
-	" > "$$_tmp" 2>&1 && \
+	node scripts/check-versions.js > "$$_tmp" 2>&1 && \
 	tail -n +1 "$$_tmp" | head -n -1 && \
 	NPM_SUMMARY=$$(tail -1 "$$_tmp") && \
 	rm -f "$$_tmp" && \
@@ -364,24 +325,15 @@ check-versions: # Compare package.json + requirements.txt versions against regis
 	OUTDATED=$$(echo "$$NPM_SUMMARY" | awk '{print $$2}') && \
 	echo "" && \
 	echo "Checking requirements.txt versions against PyPI..." && \
-	while IFS= read -r line || [ -n "$$line" ]; do \
-		[ -z "$$line" ] && continue; \
-		[ "$${line:0:1}" = "#" ] && continue; \
-		pkg_name=$$(echo "$$line" | cut -d= -f1); \
-		pkg_version=$$(echo "$$line" | cut -d= -f3); \
-		latest=$$(pip index versions "$$pkg_name" 2>/dev/null | head -1 | sed 's/.*(\(.*\))/\1/'); \
-		if [ -n "$$latest" ]; then \
-			if [ "$$pkg_version" != "$$latest" ]; then \
-				echo "$$pkg_name: $$pkg_version -> $$latest"; \
-				OUTDATED=$$((OUTDATED + 1)); \
-			else \
-				echo "$$pkg_name: up to date ($$pkg_version)"; \
-				UP_TO_DATE=$$((UP_TO_DATE + 1)); \
-			fi; \
-		else \
-			echo "$$pkg_name: could not fetch latest version (skipping)"; \
-		fi; \
-	done < requirements.txt && \
+	_tmp2=$$(mktemp) && \
+	bash scripts/check-pip-versions.sh > "$$_tmp2" 2>&1 || true && \
+	tail -n +1 "$$_tmp2" | head -n -1 && \
+	PIP_SUMMARY=$$(tail -1 "$$_tmp2") && \
+	P_UP=$$(echo "$$PIP_SUMMARY" | awk '{print $$1}') && \
+	P_OUT=$$(echo "$$PIP_SUMMARY" | awk '{print $$2}') && \
+	UP_TO_DATE=$$((UP_TO_DATE + P_UP)) && \
+	OUTDATED=$$((OUTDATED + P_OUT)) && \
+	rm -f "$$_tmp2" && \
 	echo "" && \
 	echo "Summary: $$UP_TO_DATE up to date, $$OUTDATED out of date." && \
 	exit $$OUTDATED
