@@ -189,15 +189,12 @@ preflight: # Check prerequisites before building
 	@docker info >/dev/null 2>&1 || { $(call error_msg,ERROR: docker daemon is not running); exit 1; }
 	@test -f Dockerfile || { $(call error_msg,ERROR: Dockerfile not found in $(CURDIR)); exit 1; }
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run)); exit 1; }
-	@test -f ~/.local/share/opencode/auth.json || { $(call error_msg,ERROR: ~/.local/share/opencode/auth.json not found (required for run/elevated)); exit 1; }
 	@$(call status_msg,All preflight checks passed)
 
 preflight-run: # Check prerequisites for run and elevated commands
 	@$(call bold_msg,Running preflight checks for run...)
 	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR)) — this would map your entire home into the sandbox); exit 1; }
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run/)); exit 1; }
-	@test -f ~/.local/share/opencode/auth.json || { $(call error_msg,ERROR: ~/.local/share/opencode/auth.json not found (required for run)); exit 1; }
-	@test -f ~/.gitconfig || { $(call error_msg,ERROR: ~/.gitconfig not found (required for run)); exit 1; }
 	@mkdir -p .memory/{codebase-memory-mcp,engram,opencode} 2>/dev/null; \
 	touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
 	@$(call status_msg,All run/elevated preflight checks passed)
