@@ -74,6 +74,9 @@ IMAGE_TAG ?= latest
 # Group for sandboxed runs
 GROUP ?= $(shell id -gn)
 
+# Docker group ID (falls back to 111 if docker group doesn't exist)
+DOCKER_GID ?= $(shell getent group docker 2>/dev/null | cut -d: -f3 || echo 111)
+
 # HOST_LEMONADE maps a hostname to an IP for local development
 HOST_LEMONADE ?=
 
@@ -165,7 +168,8 @@ DOCKER_BUILD_ARGS := \
 	--build-arg ENGRAM_VERSION=$(ENGRAM_VERSION) \
 	--build-arg HOST_NAME=$(HOST_NAME) \
 	--build-arg USER_ID=$$(id -u) \
-	--build-arg GROUP_ID=$(SANDBOX_GID)
+	--build-arg GROUP_ID=$(SANDBOX_GID) \
+	--build-arg DOCKER_GROUP=$(DOCKER_GID)
 
 # Shared docker image removal pattern
 IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
