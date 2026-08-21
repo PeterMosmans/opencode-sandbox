@@ -217,7 +217,13 @@ build: preflight image # Build a fresh OpenCode sandbox (with preflight check)
 
 image: # Build a fresh OpenCode sandbox
 	@$(call color_msg,Building image: $(IMAGE_NAME)...)
-	docker build . -t $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS)
+	@$(call color_msg,Build arguments:)
+	@printf '  -> ENGRAM_VERSION: %s\n' '$(ENGRAM_VERSION)'
+	@printf '  -> HOST_NAME: %s\n' '$(HOST_NAME)'
+	@printf '  -> USER_ID: %s\n' '$(shell id -u)'
+	@printf '  -> GROUP_ID: %s\n' '$(SANDBOX_GID)'
+	@printf '  -> DOCKER_GROUP: %s\n' '$(DOCKER_GID)'
+	@docker build . -t $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS)
 
 tag-version: # Tag the latest image with the opencode-ai version from package.json
 	@docker tag $(IMAGE_NAME):latest $(IMAGE_NAME):$(OPENCODE_VERSION)
