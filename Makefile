@@ -61,6 +61,8 @@ HOST_PORT ?= 8000
 OPENCODE_VERSION ?= $(shell node -e "console.log(require('./package.json').dependencies['opencode-ai'])")
 OPENCODE_SERVER_USERNAME ?= $(shell id -u --name)
 OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
+ENGRAM_VERSION ?= 1.20.0
+TARGET ?= example.com
 
 # Image tag defaults to "latest" for day-to-day builds. Override to tag
 # with the release version or any custom tag:
@@ -138,6 +140,13 @@ SANDBOX_BASE_MOUNTS := -u $$(id -u):$(SANDBOX_GID) \
 	-v ~/.config/opencode:/home/node/.config/opencode:ro \
 	-w /$(PROJECT_NAME)
 
+# Base mounts for ephemeral runs (no .memory/ volume mappings)
+SANDBOX_BASE_MOUNTS_EPHEMERAL := -u $$(id -u):$(SANDBOX_GID) \
+	-e OPENCODE_CONFIG_DIR=/home/node/.config/opencode \
+	-v $(PROJECT_ROOT):/$(PROJECT_NAME):rw \
+	-v ~/.config/opencode:/home/node/.config/opencode:ro \
+	-w /$(PROJECT_NAME)
+
 # Optional conditional mounts
 SANDBOX_OPTIONAL_MOUNTS := \
 	$(if $(HOST_LEMONADE),--add-host $(LEMONADE_HOST):$(HOST_LEMONADE)) \
@@ -147,6 +156,9 @@ SANDBOX_OPTIONAL_MOUNTS := \
 
 # Final SANDBOX_MOUNTS composed of base + optional
 SANDBOX_MOUNTS := $(SANDBOX_BASE_MOUNTS) $(SANDBOX_OPTIONAL_MOUNTS)
+
+# Ephemeral mounts (no .memory/ mappings)
+SANDBOX_MOUNTS_EPHEMERAL := $(SANDBOX_BASE_MOUNTS_EPHEMERAL) $(SANDBOX_OPTIONAL_MOUNTS)
 
 # Shared docker build arguments (non-npm packages and runtime config only)
 DOCKER_BUILD_ARGS := \
@@ -162,7 +174,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example Dockerfile .dockerignore Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash test clean image custom-image test-image test-run run-tests server package update-versions check-versions tag-version validate test-makefile
+.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash test clean image custom-image test-image test-run run-tests server package update-versions check-versions tag-version validate test-makefile run-ephemeral
 
 # === Building ===
 
@@ -228,6 +240,12 @@ run: preflight-run # Run OpenCode sandboxed in the current directory
 	@$(call show_image_tag,$(TAG))
 	@$(call show_lemonade)
 	@docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):$(TAG)
+
+run-ephemeral: # Run OpenCode sandboxed without .memory/ mappings (ephemeral)
+	@$(call color_msg,Running ephemeral sandbox image:)
+	@$(call show_image_tag,$(TAG))
+	@$(call show_lemonade)
+	docker run --rm -it $(SANDBOX_MOUNTS_EPHEMERAL) $(IMAGE_NAME):$(TAG)
 
 latest: TAG = latest
 latest: run # Run OpenCode sandboxed with latest tag
