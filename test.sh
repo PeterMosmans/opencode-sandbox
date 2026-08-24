@@ -217,22 +217,14 @@ test_agent() {
   info "agent-browser screenshot generated"
   if [[ -f "./tests/agent-${TARGET}-correct.png" ]]; then
     info "Comparing results with ./tests/agent-${TARGET}-correct.png"
-    run_cmd agent-browser snapshot "./tests/agent-${TARGET}.png"
-    if [ -n "$tree_new" ] && [ -n "$tree_base" ]; then
-      if [ "$tree_new" = "$tree_base" ]; then
-        success "Accessibility trees match - screenshots are structurally equivalent"
-      else
-        error "Accessibility trees differ - screenshots show different content"
-        error "New tree: ${tree_new}"
-        error "Base tree: ${tree_base}"
-        return 1
-      fi
+    if run_cmd cmp -s "./tests/agent-${TARGET}.png" "./tests/agent-${TARGET}-correct.png"; then
+      success "Screenshots are identical"
     else
-      info "Original screenshot not available - skipping screenshot comparison"
-      info "Previous baseline will be used for reference"
+      error "Screenshots differ from baseline"
+      return 1
     fi
   else
-    mv "./tests/agent-${TARGET}.png" "tests/agent-${TARGET}-correct.png"
+    cp "./tests/agent-${TARGET}.png" "tests/agent-${TARGET}-correct.png"
     info "First run of test - creating new screenshot (please verify manually)"
     info "Created tests/agent-${TARGET}-correct.png"
   fi
@@ -249,23 +241,14 @@ test_playwright() {
   info "Playwright screenshot generated"
   if [[ -f "./tests/playwright-${TARGET}-correct.png" ]]; then
     info "Comparing results with ./tests/playwright-${TARGET}-correct.png"
-    # Try accessibility tree comparison first
-    local tree_new tree_base
-    tree_new="$(run_cmd agent-browser snapshot "./tests/playwright-${TARGET}.png" 2> /dev/null || echo "")"
-    tree_base="$(run_cmd agent-browser snapshot "./tests/playwright-${TARGET}-correct.png" 2> /dev/null || echo "")"
-    if [ -n "$tree_new" ] && [ -n "$tree_base" ]; then
-      if [ "$tree_new" = "$tree_base" ]; then
-        success "Accessibility trees match - screenshots are structurally equivalent"
-      else
-        error "Accessibility trees differ - screenshots show different content"
-        return 1
-      fi
+    if run_cmd cmp -s "./tests/playwright-${TARGET}.png" "./tests/playwright-${TARGET}-correct.png"; then
+      success "Screenshots are identical"
     else
-      info "Accessibility tree comparison not available - skipping screenshot comparison"
-      info "Previous baseline will be used for reference"
+      error "Screenshots differ from baseline"
+      return 1
     fi
   else
-    mv "./tests/playwright-${TARGET}.png" "tests/playwright-${TARGET}-correct.png"
+    cp "./tests/playwright-${TARGET}.png" "tests/playwright-${TARGET}-correct.png"
     info "First run of test - creating new screenshot (please verify manually)"
     info "Created tests/playwright-${TARGET}-correct.png"
   fi
