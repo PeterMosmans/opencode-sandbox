@@ -14,7 +14,7 @@ FAILED_TESTS=""
 
 # Usage: ./test.sh [IMAGE_NAME] [TEST_TYPE] [MODE]
 #   IMAGE_NAME : Docker image to test (default: opencode-sandbox-$(id -u))
-#   TEST_TYPE  : Which tests to run: linters, agent, browsers, full, updates, all (default: full)
+#   TEST_TYPE  : Which tests to run: linters, agent, browsers, full, updates, servers, all (default: full)
 #   MODE       : bare (run commands directly) or docker (wrap in docker run, default)
 #   TARGET     : Host to screenshot (default: example.com)
 #
@@ -45,7 +45,7 @@ SANDBOX_GID="$(getent group "${GROUP}" | cut -d: -f3)"
 usage() {
   echo "Usage: $0 [IMAGE_NAME] [TEST_TYPE] [MODE]"
   echo "  IMAGE_NAME : Docker image to test (default: opencode-sandbox-\$(id -u))"
-  echo "  TEST_TYPE  : linters, agent, browsers, full, updates, all"
+  echo "  TEST_TYPE  : linters, agent, browsers, full, updates, servers, all"
   echo "  MODE       : bare (run directly) or docker (wrap in docker run)"
   exit 1
 }
@@ -175,7 +175,7 @@ test_linters() {
   ver="$(run_cmd pre-commit --version | awk '{print $2}')"
   printf '  pre-commit %b%s%b\n' "$BOLD" "$ver" "$RESET"
 
-  ver="$(run_cmd jq --version 2>/dev/null | sed 's/^jq-//')"
+  ver="$(run_cmd jq --version 2> /dev/null | sed 's/^jq-//')"
   printf '  jq         %b%s%b\n' "$BOLD" "$ver" "$RESET"
 
   ver="$(run_cmd xmllint --version 2>&1 | grep -oP 'libxml version \K[0-9]+' || echo "unknown")"
@@ -187,18 +187,18 @@ test_linters() {
   ver="$(run_cmd tree --version | head -1 | awk '{print $2}' | sed 's/^v//')"
   printf '  tree       %b%s%b\n' "$BOLD" "$ver" "$RESET"
 
-  ver="$(run_cmd fdfind --version 2>/dev/null | awk '{print $2}' || true)"
+  ver="$(run_cmd fdfind --version 2> /dev/null | awk '{print $2}' || true)"
   if [ -z "$ver" ] || [ "$ver" = "not found" ]; then
-    ver="$(run_cmd fd --version 2>/dev/null | head -1 | awk '{print $2}' || true)"
+    ver="$(run_cmd fd --version 2> /dev/null | head -1 | awk '{print $2}' || true)"
   fi
   [ -z "$ver" ] && ver="not found"
   printf '  fd-find    %b%s%b\n' "$BOLD" "$ver" "$RESET"
 
-  ver="$(run_cmd pyright --version 2>/dev/null | awk '{print $2}' || true)"
+  ver="$(run_cmd pyright --version 2> /dev/null | awk '{print $2}' || true)"
   [ -z "$ver" ] && ver="not found"
   printf '  pyright    %b%s%b\n' "$BOLD" "$ver" "$RESET"
 
-  ver="$(run_cmd playwright --version 2>/dev/null | awk '{print $2}' || true)"
+  ver="$(run_cmd playwright --version 2> /dev/null | awk '{print $2}' || true)"
   [ -z "$ver" ] && ver="not found"
   printf '  playwright %b%s%b\n' "$BOLD" "$ver" "$RESET"
 }
@@ -210,71 +210,145 @@ test_doctors() {
   run_cmd bd doctor
 }
 
-
 test_agent() {
   info "Testing agent-browser tool"
-  run_cmd rm -f ./tests/agent-${TARGET}.png 2>/dev/null || true
+  run_cmd rm -f "./tests/agent-${TARGET}.png" 2> /dev/null || true
   run_cmd_shell "agent-browser open https://${TARGET} && agent-browser screenshot ./tests/agent-${TARGET}.png"
   info "agent-browser screenshot generated"
   if [[ -f "./tests/agent-${TARGET}-correct.png" ]]; then
-      info "Comparing results with ./tests/agent-${TARGET}-correct.png"
-      # Try accessibility-tree comparison first
-      local tree_new tree_base
-      tree_new="$(run_cmd agent-browser accessibility-tree ./tests/agent-${TARGET}.png 2>/dev/null || echo "")"
-      tree_base="$(run_cmd agent-browser accessibility-tree ./tests/agent-${TARGET}-correct.png 2>/dev/null || echo "")"
-      if [ -n "$tree_new" ] && [ -n "$tree_base" ]; then
-          if [ "$tree_new" = "$tree_base" ]; then
-              success "Accessibility trees match - screenshots are structurally equivalent"
-          else
-              error "Accessibility trees differ - screenshots show different content"
-              error "New tree: ${tree_new}"
-              error "Base tree: ${tree_base}"
-              return 1
-          fi
+    info "Comparing results with ./tests/agent-${TARGET}-correct.png"
+    run_cmd agent-browser snapshot "./tests/agent-${TARGET}.png"
+    if [ -n "$tree_new" ] && [ -n "$tree_base" ]; then
+      if [ "$tree_new" = "$tree_base" ]; then
+        success "Accessibility trees match - screenshots are structurally equivalent"
       else
-          info "Accessibility tree comparison not available - skipping screenshot comparison"
-          info "Previous baseline will be used for reference"
+        error "Accessibility trees differ - screenshots show different content"
+        error "New tree: ${tree_new}"
+        error "Base tree: ${tree_base}"
+        return 1
       fi
+    else
+      info "Original screenshot not available - skipping screenshot comparison"
+      info "Previous baseline will be used for reference"
+    fi
   else
-      mv "./tests/agent-${TARGET}.png" "tests/agent-${TARGET}-correct.png"
-      info "First run of test - creating new screenshot (please verify manually)"
-      info "Created tests/agent-${TARGET}-correct.png" 
+    mv "./tests/agent-${TARGET}.png" "tests/agent-${TARGET}-correct.png"
+    info "First run of test - creating new screenshot (please verify manually)"
+    info "Created tests/agent-${TARGET}-correct.png"
   fi
   success "agent-browser successfully installed"
-  run_cmd rm -f ./tests/agent-${TARGET}.png 2>/dev/null
+  run_cmd rm -f "./tests/agent-${TARGET}.png" 2> /dev/null
 }
 
 test_playwright() {
   info "Testing Playwright MCP server:"
-  run_cmd rm -f ./tests/playwright-${TARGET}.png 2>/dev/null || true
+  run_cmd rm -f "./tests/playwright-${TARGET}.png" 2> /dev/null || true
   run_cmd playwright install --list
   info "Testing OpenCode and Playwright MCP server to create a screenshot (this could take a while)"
-  run_cmd opencode run use playwright mcp to create screenshot of "https://${TARGET}" and save it as ./tests/playwright-${TARGET}.png
+  run_cmd opencode run use playwright mcp to create screenshot of "https://${TARGET}" and save it as "./tests/playwright-${TARGET}.png"
   info "Playwright screenshot generated"
   if [[ -f "./tests/playwright-${TARGET}-correct.png" ]]; then
-      info "Comparing results with ./tests/playwright-${TARGET}-correct.png"
-      # Try accessibility-tree comparison first
-      local tree_new tree_base
-      tree_new="$(run_cmd agent-browser accessibility-tree ./tests/playwright-${TARGET}.png 2>/dev/null || echo "")"
-      tree_base="$(run_cmd agent-browser accessibility-tree ./tests/playwright-${TARGET}-correct.png 2>/dev/null || echo "")"
-      if [ -n "$tree_new" ] && [ -n "$tree_base" ]; then
-          if [ "$tree_new" = "$tree_base" ]; then
-              success "Accessibility trees match - screenshots are structurally equivalent"
-          else
-              error "Accessibility trees differ - screenshots show different content"
-              return 1
-          fi
+    info "Comparing results with ./tests/playwright-${TARGET}-correct.png"
+    # Try accessibility tree comparison first
+    local tree_new tree_base
+    tree_new="$(run_cmd agent-browser snapshot "./tests/playwright-${TARGET}.png" 2> /dev/null || echo "")"
+    tree_base="$(run_cmd agent-browser snapshot "./tests/playwright-${TARGET}-correct.png" 2> /dev/null || echo "")"
+    if [ -n "$tree_new" ] && [ -n "$tree_base" ]; then
+      if [ "$tree_new" = "$tree_base" ]; then
+        success "Accessibility trees match - screenshots are structurally equivalent"
       else
-          info "Accessibility tree comparison not available - skipping screenshot comparison"
-          info "Previous baseline will be used for reference"
+        error "Accessibility trees differ - screenshots show different content"
+        return 1
       fi
+    else
+      info "Accessibility tree comparison not available - skipping screenshot comparison"
+      info "Previous baseline will be used for reference"
+    fi
   else
-      mv "./tests/playwright-${TARGET}.png" "tests/playwright-${TARGET}-correct.png"
-      info "First run of test - creating new screenshot (please verify manually)"
-      info "Created tests/playwright-${TARGET}-correct.png" 
+    mv "./tests/playwright-${TARGET}.png" "tests/playwright-${TARGET}-correct.png"
+    info "First run of test - creating new screenshot (please verify manually)"
+    info "Created tests/playwright-${TARGET}-correct.png"
   fi
   success "Playwright successfully installed"
-  run_cmd rm -f ./tests/playwright-${TARGET}.png 2>/dev/null
+  run_cmd rm -f "./tests/playwright-${TARGET}.png" 2> /dev/null
+}
+
+test_servers() {
+  info "Testing LLM server connectivity..."
+
+  # Resolve config file path entirely inside the container
+  local config_file
+  # shellcheck disable=SC2016
+  config_file="$(run_cmd sh -c '
+    f="${OPENCODE_CONFIG:-~/.config/opencode/opencode.json}"
+    # Expand ~ only if present (quote ~ to prevent shell tilde expansion in pattern)
+    case "$f" in
+      "~"/*) f="${HOME}/${f#"~"/}" ;;
+    esac
+    echo "$f"
+  ' 2> /dev/null)"
+
+  # Fallback if run_cmd failed
+  config_file="${config_file:-/home/node/.config/opencode/opencode.json}"
+
+  if ! run_cmd test -f "$config_file"; then
+    info "No opencode config found — skipping server tests"
+    return 0
+  fi
+
+  local default_model
+  default_model="$(run_cmd jq -r '.model // empty' "$config_file" 2> /dev/null)"
+  if [ -z "$default_model" ]; then
+    info "No default model set in config — testing all configured servers"
+    default_model="all"
+  fi
+
+  # Build a list of all server URLs
+  local all_urls
+  all_urls="$(run_cmd jq -r '.provider | to_entries[] | "\(.key)|\(.value.options.baseURL)"' "$config_file" 2> /dev/null)"
+  if [ -z "$all_urls" ]; then
+    info "No server URLs found in config — skipping server tests"
+    return 0
+  fi
+
+  # Determine required URLs (from .model) vs optional
+  local required_urls=""
+  if [ "$default_model" != "all" ]; then
+    local provider_name model_name
+    provider_name="${default_model%/*}"
+    model_name="${default_model#*/}"
+    # shellcheck disable=SC2016
+    required_urls="$(run_cmd jq -r --arg provider "$provider_name" --arg model "$model_name" '
+      .provider | to_entries[]
+      | select(.key == $provider and .value.models[$model] != null)
+      | "\(.key)|\(.value.options.baseURL)"
+    ' "$config_file" 2> /dev/null)"
+  fi
+
+  local required_fail=0
+  local optional_fail=0
+  local total=0
+
+  while IFS='|' read -r server_key server_url; do
+    [ -z "$server_url" ] && continue
+    total=$((total + 1))
+    info "  Testing ${server_url}..."
+    if run_cmd curl -sf --max-time 10 "$server_url" > /dev/null 2>&1; then
+      success "    ${server_url} — reachable"
+    else
+      error "    ${server_url} — unreachable"
+      if [ -n "$required_urls" ] && echo "$required_urls" | grep -qF "${server_key}|${server_url}"; then
+        required_fail=$((required_fail + 1))
+      else
+        optional_fail=$((optional_fail + 1))
+      fi
+    fi
+  done <<< "$all_urls"
+
+  info "  ${total} server(s) checked: ${required_fail} required unreachable, ${optional_fail} optional unreachable"
+  if [ "$required_fail" -gt 0 ]; then
+    return 1
+  fi
 }
 
 test_base() {
@@ -297,15 +371,15 @@ test_base() {
 
   if [ "$MODE" = "docker" ]; then
     if docker run --rm --group-add docker \
-       -v /var/run/docker.sock:/var/run/docker.sock:ro \
-       -v /usr/bin/docker:/usr/bin/docker:ro \
-       --entrypoint /usr/bin/docker "$IMAGE_NAME" ps 2>/dev/null; then
+      -v /var/run/docker.sock:/var/run/docker.sock:ro \
+      -v /usr/bin/docker:/usr/bin/docker:ro \
+      --entrypoint /usr/bin/docker "$IMAGE_NAME" ps 2> /dev/null; then
       success "Docker-in-Docker test passed"
     else
       info "Docker-in-Docker test skipped: socket not available or test failed"
     fi
   else
-    if docker ps >/dev/null 2>&1; then
+    if docker ps > /dev/null 2>&1; then
       success "Docker test passed"
     else
       info "Docker test skipped: docker not available"
@@ -360,7 +434,7 @@ test_updates() {
 
   info "Checking for available pip package updates..."
   if [ "$MODE" = "docker" ]; then
-    if ! run_cmd test -f requirements.txt 2>/dev/null; then
+    if ! run_cmd test -f requirements.txt 2> /dev/null; then
       info "requirements.txt not found in container - skipping pip update check"
       echo ""
       return 0
@@ -389,7 +463,7 @@ test_config() {
   info "Testing OpenCode configuration..."
   local config_file
   # shellcheck disable=SC2016
-  config_file="$(run_cmd sh -c 'echo "${OPENCODE_CONFIG:-~/.config/opencode/opencode.json}"' 2>/dev/null || echo "")"
+  config_file="$(run_cmd sh -c 'echo "${OPENCODE_CONFIG:-~/.config/opencode/opencode.json}"' 2> /dev/null || echo "")"
   config_file="${config_file:-~/.config/opencode/opencode.json}"
   # Resolve ~ to actual home
   config_file="${config_file/#\~/$HOME}"
@@ -397,18 +471,18 @@ test_config() {
   if run_cmd test -f "$config_file"; then
     success "Configuration file found: ${BOLD}${config_file}${RESET}"
 
-    if run_cmd command -v jq >/dev/null 2>&1; then
+    if run_cmd command -v jq > /dev/null 2>&1; then
       local model
-      model="$(run_cmd jq -r '.model // "not set"' "$config_file" 2>/dev/null)"
+      model="$(run_cmd jq -r '.model // "not set"' "$config_file" 2> /dev/null)"
       printf '  Default model: %b%s%b\n' "$BOLD" "$model" "$RESET"
 
       local providers
-      providers="$(run_cmd jq -r '.provider // {} | keys[]' "$config_file" 2>/dev/null)"
+      providers="$(run_cmd jq -r '.provider // {} | keys[]' "$config_file" 2> /dev/null)"
       if [ -n "$providers" ]; then
         printf '  Providers:\n'
         while IFS= read -r provider; do
           local url
-          url="$(run_cmd jq -r ".provider[\"${provider}\"].options.baseURL // \"not set\"" "$config_file" 2>/dev/null)"
+          url="$(run_cmd jq -r ".provider[\"${provider}\"].options.baseURL // \"not set\"" "$config_file" 2> /dev/null)"
           printf '    %b%s%b -> %s\n' "$BOLD" "$provider" "$RESET" "$url"
         done <<< "$providers"
       fi
@@ -426,7 +500,7 @@ test_config() {
 
 validate_inputs() {
   # Validate IMAGE_NAME is a local Docker image
-  if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+  if ! docker image inspect "$IMAGE_NAME" > /dev/null 2>&1; then
     error "Error: Image '${IMAGE_NAME}' not found locally"
     echo "Run 'docker pull ${IMAGE_NAME}' or build the image first."
     exit 1
@@ -434,17 +508,17 @@ validate_inputs() {
 
   # Validate TEST_TYPE
   case "$TEST_TYPE" in
-    linters|agent|browsers|full|updates|all) ;;
+    linters | agent | browsers | full | updates | all | servers) ;;
     *)
       error "Error: Invalid TEST_TYPE '${TEST_TYPE}'"
-      echo "Valid options: linters, agent, browsers, full, updates, all"
+      echo "Valid options: linters, agent, browsers, full, updates, servers, all"
       exit 1
       ;;
   esac
 
   # Validate MODE
   case "$MODE" in
-    bare|docker) ;;
+    bare | docker) ;;
     *)
       error "Error: Invalid MODE '${MODE}'"
       echo "Valid options: bare, docker"
@@ -464,6 +538,7 @@ run_tests() {
   TEST_ENTRIES=""
 
   # Helper to wrap a test with timing and result recording
+  # shellcheck disable=SC2317
   run_test() {
     local test_name="$1"
     shift
@@ -487,23 +562,58 @@ run_tests() {
 
   test_config
   echo ""
-  run_test "doctors" test_doctors
+
+  # Track whether foundational tests passed — if config or servers fail,
+  # skip everything that depends on them
+  FOUNDATION_OK=true
+  run_test() {
+    local test_name="$1"
+    shift
+    local start_time
+    start_time="$(date +%s)"
+    if "$@"; then
+      local end_time duration
+      end_time="$(date +%s)"
+      duration=$((end_time - start_time))
+      record_result "$test_name" "PASS" "$duration"
+      TEST_ENTRIES="${TEST_ENTRIES}${test_name}|PASS|${duration}s\n"
+    else
+      local end_time duration
+      end_time="$(date +%s)"
+      duration=$((end_time - start_time))
+      record_result "$test_name" "FAIL" "$duration"
+      TEST_ENTRIES="${TEST_ENTRIES}${test_name}|FAIL|${duration}s\n"
+      error "Test '${test_name}' failed (exit code: $?, duration: ${duration}s)"
+      FOUNDATION_OK=false
+    fi
+  }
+
   case "$TEST_TYPE" in
     browsers)
+      if [ "$FOUNDATION_OK" = true ]; then
+        run_test "base" test_base
+      fi
       run_test "agent" test_agent
       run_test "playwright" test_playwright
       ;;
     linters) run_test "linters" test_linters ;;
+    servers) run_test "servers" test_servers ;;
     updates) run_test "updates" test_updates ;;
     full | all)
-      run_test "base" test_base
+      run_test "servers" test_servers
       echo ""
-      run_test "linters" test_linters
-      echo ""
-      run_test "updates" test_updates
-      echo ""
-      run_test "agent" test_agent
-      run_test "playwright" test_playwright
+      if [ "$FOUNDATION_OK" = true ]; then
+        run_test "base" test_base
+        echo ""
+        run_test "linters" test_linters
+        echo ""
+        run_test "updates" test_updates
+        echo ""
+        run_test "doctors" test_doctors
+        echo ""
+        run_test "agent" test_agent
+        run_test "playwright" test_playwright
+      fi
       ;;
     *)
       usage

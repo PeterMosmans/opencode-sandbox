@@ -178,7 +178,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example Dockerfile .dockerignore Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash test clean image custom-image test-image test-run run-tests server package update-versions check-versions tag-version validate test-makefile run-ephemeral
+.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash test clean image custom-image run-tests run-servers server package update-versions check-versions tag-version validate test-makefile run-ephemeral
 
 # === Building ===
 
@@ -234,10 +234,6 @@ custom-image: # Build image from alternative Dockerfile with different name
 	@$(call color_msg,Building image: $(CUSTOM_IMAGE_NAME)...)
 	@docker build -f Dockerfile.custom . -t $(CUSTOM_IMAGE_NAME) -t $(CUSTOM_IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS)
 
-test-image: preflight # Build a test OpenCode sandbox image
-	@$(call color_msg,Building test image: $(TEST_IMAGE_NAME)...)
-	@docker build . -t $(TEST_IMAGE_NAME) -t $(TEST_IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS) --progress=plain
-
 # === Running ===
 
 TAG ?= $(IMAGE_TAG)
@@ -272,11 +268,6 @@ server: preflight-run # Run OpenCode server in the current directory
 		$(IMAGE_NAME):$(IMAGE_TAG) \
 		/bin/bash -c "cd /$(PROJECT_NAME) && opencode serve --port $(SERVER_PORT) --hostname 0.0.0.0"
 
-test-run: preflight-run # Run OpenCode test sandboxed in the current directory
-	@$(call color_msg,Running test image:)
-	@printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(TEST_IMAGE_NAME):" "$(IMAGE_TAG)"
-	@docker run --rm -it $(SANDBOX_MOUNTS) $(TEST_IMAGE_NAME)
-
 elevated: preflight-elevated # Run OpenCode sandboxed with Docker access
 	@$(call show_lemonade)
 	@docker run --rm -it \
@@ -306,6 +297,20 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 		-u $$(id -u):$(SANDBOX_GID) \
 		$(IMAGE_NAME) \
 		/bin/bash /home/node/test.sh "${IMAGE:-$(IMAGE_NAME)}" "${TYPE:-full}" bare
+
+run-servers: preflight-run # Test LLM server connectivity from inside Docker container
+	@test -x test.sh || { $(call error_msg,test.sh not found or not executable); exit 1; }
+	@$(call color_msg,Testing LLM server connectivity inside Docker container...)
+	@$(call color_msg,  Image: $(IMAGE_NAME))
+	@mkdir -p tests/ 2>/dev/null
+	@docker run --rm -it \
+		$(SANDBOX_MOUNTS) \
+		$(DOCKER_ELEVATED_FLAGS) \
+	    -v ./tests:/tests:rw \
+		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
+		-u $$(id -u):$(SANDBOX_GID) \
+		$(IMAGE_NAME) \
+		/bin/bash /home/node/test.sh "${IMAGE:-$(IMAGE_NAME)}" "servers" bare
 
 # === Testing ===
 
