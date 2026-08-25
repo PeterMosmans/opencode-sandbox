@@ -275,14 +275,6 @@ elevated: preflight-elevated # Run OpenCode sandboxed with Docker access
 		$(SANDBOX_MOUNTS) \
 		$(IMAGE_NAME)
 
-# Tests are in test.sh
-# Usage: ./test.sh [IMAGE_NAME] [TEST_TYPE]
-#	IMAGE_NAME : Docker image to test (default: $(IMAGE_NAME))
-#	TYPE  : linters, agent, full, updates (default: full)
-#
-# Run tests inside Docker: make run-tests TYPE=full
-# Run tests locally:        ./test.sh [IMAGE_NAME] [TYPE]
-
 run-tests: preflight-run # Run tests inside Docker container (make run-tests IMAGE=my-image TYPE=full)
 	@test -x test.sh || { $(call error_msg,test.sh not found or not executable); exit 1; }
 	@$(call color_msg,Running tests inside Docker container...)
@@ -290,7 +282,7 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 	@$(call color_msg,  Type:  $(TYPE))
 	@mkdir -p tests/ 2>/dev/null
 	@docker run --rm -it \
-		$(SANDBOX_MOUNTS) \
+		$(SANDBOX_MOUNTS_EPHEMERAL) \
 		$(DOCKER_ELEVATED_FLAGS) \
 	    -v ./tests:/tests:rw \
 		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
