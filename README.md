@@ -10,7 +10,6 @@ servers pre-installed.
 - **agent-browser** — Browser automation via Playwright
 - **Engram** — Persistent memory MCP server
 - **codebase-memory-mcp** — Codebase knowledge graph
-- **openspec-mcp** — Specification-driven development
 - **Prettier, Biome, Ruff, Stylelint** — Linters and formatters
 - **ShellCheck, yamllint** — Shell and YAML linting
 

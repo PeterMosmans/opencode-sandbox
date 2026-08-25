@@ -386,7 +386,6 @@ test_updates() {
     commit-and-tag-version
     htmlhint
     opencode-ai
-    openspec-mcp
     prettier
     "@prettier/plugin-xml"
     prettier-plugin-ini
