@@ -58,14 +58,16 @@ RUN apt-get update && \
     lsof \
     make \
     netcat-openbsd \
+    openssh-client \
     procps \
     python3 \
     python3-pip \
     python3-venv \
     ripgrep \
     shellcheck \
+    sshpass \
     sudo \
-    tree \      
+    tree \
     unzip \
     whois \
     xxd \
