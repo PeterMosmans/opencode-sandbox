@@ -45,7 +45,7 @@ SANDBOX_GID="$(getent group "${GROUP}" | cut -d: -f3)"
 usage() {
   echo "Usage: $0 [IMAGE_NAME] [TEST_TYPE] [MODE]"
   echo "  IMAGE_NAME : Docker image to test (default: opencode-sandbox-\$(id -u))"
-  echo "  TEST_TYPE  : linters, agent, browsers, full, updates, servers, all"
+  echo "  TEST_TYPE  : linters, agent, browsers, full, updates, servers, dind, all"
   echo "  MODE       : bare (run directly) or docker (wrap in docker run)"
   exit 1
 }
@@ -208,6 +208,25 @@ test_doctors() {
   run_cmd agent-browser doctor
   run_cmd engram doctor
   run_cmd bd doctor
+}
+
+test_dind() {
+  info "Testing rootless Docker-in-Docker..."
+  if [ "${DIND:-0}" != "1" ]; then
+    info "  skipped: requires DIND=1 (use 'make run-dind' or 'make run-tests TYPE=dind DIND=1')"
+    return 0
+  fi
+  if ! run_cmd docker info > /dev/null 2>&1; then
+    error "rootless dockerd is not reachable (DOCKER_HOST=${DOCKER_HOST:-unset})"
+    return 1
+  fi
+  success "rootless dockerd is reachable"
+  # Functional smoke test: build and run a tiny image entirely inside the sandbox daemon
+  if ! run_cmd_shell 'printf "FROM busybox\nCMD [\"echo\", \"inner-container-ok\"]\n" | docker build -q -t dind-smoke-test - > /dev/null && docker run --rm dind-smoke-test | grep -q inner-container-ok'; then
+    error "building/running a container inside the sandbox failed"
+    return 1
+  fi
+  success "inner build/run works"
 }
 
 test_agent() {
@@ -491,7 +510,7 @@ validate_inputs() {
 
   # Validate TEST_TYPE
   case "$TEST_TYPE" in
-    linters | agent | browsers | full | updates | all | servers) ;;
+    linters | agent | browsers | full | updates | all | servers | dind) ;;
     *)
       error "Error: Invalid TEST_TYPE '${TEST_TYPE}'"
       echo "Valid options: linters, agent, browsers, full, updates, servers, all"
@@ -582,6 +601,13 @@ run_tests() {
     linters) run_test "linters" test_linters ;;
     servers) run_test "servers" test_servers ;;
     updates) run_test "updates" test_updates ;;
+    dind)
+      if [ "$FOUNDATION_OK" = true ]; then
+        run_test "base" test_base
+        echo ""
+      fi
+      run_test "dind" test_dind
+      ;;
     full | all)
       run_test "servers" test_servers
       echo ""
@@ -593,6 +619,8 @@ run_tests() {
         run_test "updates" test_updates
         echo ""
         run_test "doctors" test_doctors
+        echo ""
+        run_test "dind" test_dind
         echo ""
         run_test "agent" test_agent
         run_test "playwright" test_playwright

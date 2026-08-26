@@ -5,5 +5,6 @@
 !requirements.txt
 !package.json
 !docker-entrypoint.sh
+!dockerd-sandboxed.sh
 # .. and optional certificate files
 !*.pem

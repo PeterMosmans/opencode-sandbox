@@ -87,6 +87,19 @@ SERVER_BIND ?= 127.0.0.1
 # Set to 1 to allow weak server credentials (password equals username, or 'changeme')
 ALLOW_WEAK_SERVER_CREDENTIALS ?= 0
 
+# Docker-in-Docker (rootless, private daemon — no host socket involved).
+# Device flags can be overridden (e.g. set DIND_DEVICE_FLAGS= --device /dev/fuse
+# on platforms without /dev/net/tun; the launcher then falls back to --net=host)
+DIND_DEVICE_FLAGS ?= --device /dev/fuse --device /dev/net/tun
+DIND_EXTRA_FLAGS ?=
+# The engine's default seccomp profile blocks nested userns/mount primitives,
+# so DIND runs relax the OUTER seccomp filter. Since Engine 25,
+# no-new-privileges is also default-on, which neuters the setuid bit of
+# newuidmap/newgidmap (multi-entry UID maps then fail with EPERM) — disabled
+# for DIND runs as well. Compensating controls stay in place: no host Docker
+# socket, namespaced daemon, non-root user.
+DIND_SECURITY_FLAGS ?= --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt no-new-privileges=false
+
 # Test configuration
 TYPE ?= full
 
@@ -182,10 +195,10 @@ DOCKER_BUILD_ARGS := \
 IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
 
 # Files included in package archive
-PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh Makefile test.sh README.md package.json requirements.txt
+PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash clean image custom-image run-tests run-servers server package update-versions check-versions tag-version validate test-makefile run-ephemeral
+.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash clean image custom-image run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile run-ephemeral
 
 # === Building ===
 
@@ -206,7 +219,7 @@ preflight-run: # Check prerequisites for run and elevated commands
 	@$(call bold_msg,Running preflight checks for run...)
 	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR)) — this would map your entire home into the sandbox); exit 1; }
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run/)); exit 1; }
-	@mkdir -p .memory/{codebase-memory-mcp,engram,opencode} 2>/dev/null; \
+	@mkdir -p .memory/{codebase-memory-mcp,dind,engram,opencode} 2>/dev/null; \
 	touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
 	@$(call status_msg,All run/elevated preflight checks passed)
 
@@ -302,6 +315,25 @@ elevated: preflight-elevated # Run OpenCode sandboxed with Docker access
 		$(SANDBOX_MOUNTS) \
 		$(IMAGE_NAME)
 
+run-dind: preflight-run # Run OpenCode sandboxed with a private rootless Docker daemon (no host socket)
+	@$(call bold_msg,Running sandbox with rootless Docker-in-Docker...)
+	@$(call color_msg,The daemon is namespaced and cannot touch the host Docker instance)
+	@$(call show_image_tag,$(TAG))
+	@$(call show_lemonade)
+	@mkdir -p .memory/dind
+	@docker run --rm -it \
+		-e DIND=1 \
+		-e DIND_DATA_ROOT=/$(PROJECT_NAME)/.memory/dind \
+		$(DIND_DEVICE_FLAGS) \
+		$(DIND_SECURITY_FLAGS) \
+		$(DIND_EXTRA_FLAGS) \
+		$(SANDBOX_MOUNTS) \
+		$(IMAGE_NAME):$(TAG)
+
+# DIND test runs get a private daemon and deliberately NO host Docker socket,
+# proving the sandbox works without it
+DIND_TEST_FLAGS := $(if $(filter dind,$(TYPE)),-e DIND=1 -e DIND_DATA_ROOT=/$(PROJECT_NAME)/.memory/dind $(DIND_DEVICE_FLAGS) $(DIND_SECURITY_FLAGS))
+
 run-tests: preflight-run # Run tests inside Docker container (make run-tests IMAGE=my-image TYPE=full)
 	@test -x test.sh || { $(call error_msg,test.sh not found or not executable); exit 1; }
 	@$(call color_msg,Running tests inside Docker container...)
@@ -310,8 +342,9 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 	@mkdir -p tests/ 2>/dev/null
 	@docker run --rm -it \
 		$(SANDBOX_MOUNTS_EPHEMERAL) \
-		$(DOCKER_ELEVATED_FLAGS) \
-	    -v ./tests:/tests:rw \
+		$(if $(filter dind,$(TYPE)),,$(DOCKER_ELEVATED_FLAGS)) \
+		$(DIND_TEST_FLAGS) \
+	    -v $(CURDIR)/tests:/tests:rw \
 		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
 		-u $$(id -u):$(SANDBOX_GID) \
 		$(IMAGE_NAME) \
@@ -325,7 +358,7 @@ run-servers: preflight-run # Test LLM server connectivity from inside Docker con
 	@docker run --rm -it \
 		$(SANDBOX_MOUNTS) \
 		$(DOCKER_ELEVATED_FLAGS) \
-	    -v ./tests:/tests:rw \
+	    -v $(CURDIR)/tests:/tests:rw \
 		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
 		-u $$(id -u):$(SANDBOX_GID) \
 		$(IMAGE_NAME) \

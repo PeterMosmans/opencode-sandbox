@@ -52,25 +52,33 @@ RUN apt-get update && \
     bind9-dnsutils \
     ca-certificates \
     curl \
+    docker-cli \
+    docker.io \
     fd-find \
     file \
+    fuse-overlayfs \
     git \
+    iproute2 \
     iputils-ping \
     jq \
     libxml2-utils \
     lsof \
     make \
     netcat-openbsd \
+    libcap2-bin \
     openssh-client \
     procps \
     python3 \
     python3-pip \
     python3-venv \
     ripgrep \
+    rootlesskit \
     shellcheck \
+    slirp4netns \
     sshpass \
     sudo \
     tree \
+    uidmap \
     unzip \
     whois \
     xxd \
@@ -79,11 +87,35 @@ RUN apt-get update && \
     zsh && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# 5: Create group if it doesn't exist yet
-RUN (getent group ${GROUP_ID} >/dev/null 2>&1 || groupadd -g ${GROUP_ID} coder 2>/dev/null) && \
-    (getent group ${DOCKER_GROUP} >/dev/null 2>&1 || groupadd -g ${DOCKER_GROUP} docker) && \
-    usermod -u ${USER_ID} node && \
-    usermod -a -G ${GROUP_ID},${DOCKER_GROUP} node
+# 5: Ensure required groups exist.
+# Groups are keyed by GID (the docker group must match the HOST's docker GID,
+# passed via --build-arg, so sandbox users can reach a mounted Docker socket).
+# The docker.io package may already have created a 'docker' group at a
+# different GID: remove and recreate it at the requested one.
+RUN set -eux; \
+    if ! getent group "${GROUP_ID}" > /dev/null; then \
+        if getent group coder > /dev/null; then groupdel coder; fi; \
+        groupadd -g "${GROUP_ID}" coder; \
+    fi; \
+    if ! getent group "${DOCKER_GROUP}" > /dev/null; then \
+        if getent group docker > /dev/null; then groupdel docker; fi; \
+        groupadd -g "${DOCKER_GROUP}" docker; \
+    fi; \
+    usermod -u "${USER_ID}" node; \
+    usermod -g "${GROUP_ID}" node; \
+    usermod -a -G "${GROUP_ID},${DOCKER_GROUP}" node
+
+# 5b: Allow the sandbox user to map subordinate UIDs/GIDs (required for
+# rootless Docker; newuidmap/newgidmap come from the uidmap package).
+# Known Debian packaging issue (shadow#958, rootlesskit#404, buildkit#2680):
+# the packaged helpers fail inside containers. Fix: strip the setuid bit and
+# grant file capabilities instead — with BOTH bits set, the (here broken)
+# suid path takes precedence and multi-entry UID maps fail with EPERM.
+RUN echo "node:100000:65536" >> /etc/subuid && \
+    echo "node:100000:65536" >> /etc/subgid && \
+    chmod 0755 /usr/bin/newuidmap /usr/bin/newgidmap && \
+    setcap cap_setuid=ep /usr/bin/newuidmap && \
+    setcap cap_setgid=ep /usr/bin/newgidmap
 
 # 6: Install global npm packages from package.json
 COPY package.json /tmp/package.json
@@ -130,6 +162,7 @@ RUN mkdir -p /opt/google/chrome/ && \
 # Custom CAs are trusted system-wide via update-ca-certificates (step 2).
 ENV STRICT_TLS=0
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chmod=0755 dockerd-sandboxed.sh /usr/local/bin/dockerd-sandboxed
 
 USER node
 

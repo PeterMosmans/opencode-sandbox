@@ -72,9 +72,40 @@ make image
 make run
 ```
 
-There is also an **elevated** version, which allows the OpenCode container
-Docker access. **Please note that this is not secure**, and would allow (any
-process within) OpenCode to break out of the sandbox easily.
+## Docker Access Modes
+
+| Mode               | Daemon                         | Escape reach          |
+| ------------------ | ------------------------------ | --------------------- |
+| `make run`         | none                           | sandbox only          |
+| `make run-dind`    | private rootless daemon        | sandbox only          |
+| `make elevated`    | **host** daemon (socket mount) | **game over — avoid** |
+
+`make run-dind` starts a user-namespaced dockerd *inside* the container
+(rootlesskit + slirp4netns + fuse-overlayfs). The agent can build and run
+images fully autonomously, but there is no path to the host Docker instance.
+Images and containers persist in `.memory/dind/`.
+
+Notes:
+
+- Requires unprivileged user namespaces on the host kernel (default on Linux,
+  WSL2 and Docker Desktop). If startup fails with "operation not permitted":
+  - Debian family / WSL: `sudo sysctl -w kernel.unprivileged_userns_clone=1`
+  - Ubuntu 24.04+: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`
+- DIND runs relax the outer seccomp filter (`seccomp=unconfined`) because the
+  engine default blocks nested namespace/mount primitives, and disable
+  `no-new-privileges` (default-on since Engine 25) so the setuid UID-map
+  helpers work. The sandbox boundaries are unaffected: no host Docker socket,
+  namespaced daemon, non-root user. Override with `DIND_SECURITY_FLAGS=`.
+- Without `/dev/fuse`, the daemon falls back to the slower `vfs` storage
+  driver. Override device flags with `DIND_DEVICE_FLAGS=` or pass extras via
+  `DIND_EXTRA_FLAGS=`.
+- `docker compose` is not installed; port publishing uses rootlesskit's
+  builtin port driver.
+
+There is also an **elevated** version, which gives the OpenCode container
+access to the host Docker daemon. **Please note that this is not secure**, and
+would allow (any process within) OpenCode to break out of the sandbox easily.
+Only use it when the safer modes above are insufficient.
 
 ```
 make run-elevated
@@ -123,11 +154,12 @@ make run-tests # Run tests
 ### Run
 
 ```bash
-make run      # Run OpenCode sandbox
-make latest   # Run with "latest" tag
-make bash     # Start a bash shell in the sandbox
-make elevated # Run with Docker socket access
-make server   # Run OpenCode server (requires OPENCODE_SERVER_PASSWORD)
+make run       # Run OpenCode sandbox (no Docker access)
+make run-dind  # Run with a private rootless Docker daemon (recommended)
+make latest    # Run with "latest" tag
+make bash      # Start a bash shell in the sandbox
+make elevated  # Run with host Docker socket access (INSECURE, see above)
+make server    # Run OpenCode server (requires OPENCODE_SERVER_PASSWORD)
 ```
 
 ### Test
