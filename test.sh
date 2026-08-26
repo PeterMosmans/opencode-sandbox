@@ -343,11 +343,12 @@ test_base() {
 
   if [ -n "${HOST_NAME:-}" ]; then
     echo "Testing connection with ${HOST_NAME}"
+    # Custom CAs are installed in the system trust store, so no --cacert needed
     if [ "$MODE" = "docker" ]; then
-      docker run --rm --entrypoint curl "$IMAGE_NAME" -I --cacert /etc/ssl/certs/"${HOST_NAME}".pem \
+      docker run --rm --entrypoint curl "$IMAGE_NAME" -I \
         "https://${HOST_NAME}:${HOST_PORT}/"
     else
-      curl -I --cacert /etc/ssl/certs/"${HOST_NAME}".pem \
+      curl -I \
         "https://${HOST_NAME}:${HOST_PORT}/"
     fi
   fi

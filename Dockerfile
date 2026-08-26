@@ -6,7 +6,6 @@
 # 1: Use a nice slim Debian-based image
 FROM node:24-trixie-slim
 
-ARG HOST_NAME=
 ARG USER_ID=1001
 ARG GROUP_ID=1001
 ARG DOCKER_GROUP=111
@@ -22,7 +21,6 @@ ENV OPENCODE_DISABLE_AUTOUPDATE=true
 # Enable websearch - see https://opencode.ai/docs/tools/#websearch
 ENV OPENCODE_ENABLE_EXA=1
 
-ENV CURL_CA_BUNDLE=""
 ENV DEBIAN_FRONTEND="noninteractive"
 
 # Ensure that Chrome can run headless
@@ -36,12 +34,17 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/google/chrome/chrome
 # Add Python package location to the path
 ENV PATH="/opt/venv/bin:$PATH"
 
-# 2: Copy SSL certs
-COPY *.pem /etc/ssl/certs/
-# 3: Optional - add certificate to CA bundle
-RUN if [ -n "${HOST_NAME}" ]; then \
-        echo "export CURL_CA_BUNDLE=/etc/ssl/certs/${HOST_NAME}.pem" > /etc/profile.d/curl-ca-bundle.sh; \
-    fi
+# 2: Install optional custom CA certificates into the system trust store
+# (update-ca-certificates requires the .crt extension)
+# Note: COPY silently adds nothing when no *.pem exists, so guard everything.
+COPY *.pem /usr/local/share/ca-certificates/custom/
+RUN set -eux; \
+    d=/usr/local/share/ca-certificates/custom; \
+    if [ -d "$d" ] && ls "$d"/*.pem > /dev/null 2>&1; then \
+        for f in "$d"/*.pem; do mv -- "$f" "${f%.pem}.crt"; done; \
+        update-ca-certificates; \
+    fi; \
+    rm -rf /usr/local/share/ca-certificates/custom
 
 # 4: Install system packages
 RUN apt-get update && \
@@ -121,9 +124,14 @@ RUN mkdir -p /opt/google/chrome/ && \
     -x ln -s {} /opt/google/chrome/chrome && \
     ln -s /opt/google/chrome/chrome /usr/local/bin/chrome
 
-# Disable TLS verification by default (for internal CA setups)
-ENV NODE_TLS_REJECT_UNAUTHORIZED=0
+# TLS policy is applied at runtime by the entrypoint:
+# STRICT_TLS=0 (default) keeps Node.js verification disabled as a temporary
+# workaround, because OpenCode does not fully support custom CAs yet.
+# Custom CAs are trusted system-wide via update-ca-certificates (step 2).
+ENV STRICT_TLS=0
+COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 USER node
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["opencode"]

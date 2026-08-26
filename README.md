@@ -100,13 +100,16 @@ cp env.example .env
 
 | Variable                   | Default          | Description                                          |
 | -------------------------- | ---------------- | ---------------------------------------------------- |
+| `ALLOW_WEAK_SERVER_CREDENTIALS` | `0`         | Set to `1` to allow weak server credentials          |
 | `ENGRAM_VERSION`           | `1.20.0`         | Version of the Engram binary to download             |
 | `GROUP`                    | default group    | Group name to be used in Docker container            |
-| `LEMONADE_HOST`            | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)    |
 | `HOST_LEMONADE`            | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev) |
+| `LEMONADE_HOST`            | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)    |
+| `SERVER_BIND`              | `127.0.0.1`      | Bind address for the published server port           |
+| `STRICT_TLS`               | `0`              | Set to `1` to enforce Node.js TLS verification       |
 | `TARGET`                   | `example.com`    | Test target hostname for screenshot tests            |
 | `OPENCODE_SERVER_USERNAME` | _(current user)_ | Username for `make server`                           |
-| `OPENCODE_SERVER_PASSWORD` | _(current user)_ | Password for `make server`                           |
+| `OPENCODE_SERVER_PASSWORD` | _(current user)_ | Password for `make server` (weak values are refused) |
 
 ## Usage
 

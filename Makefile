@@ -82,6 +82,10 @@ HOST_LEMONADE ?=
 
 # Server configuration
 SERVER_PORT ?= 5000
+# Bind address for the published server port (use 0.0.0.0 to expose beyond localhost)
+SERVER_BIND ?= 127.0.0.1
+# Set to 1 to allow weak server credentials (password equals username, or 'changeme')
+ALLOW_WEAK_SERVER_CREDENTIALS ?= 0
 
 # Test configuration
 TYPE ?= full
@@ -170,7 +174,6 @@ SANDBOX_MOUNTS_EPHEMERAL := $(SANDBOX_BASE_MOUNTS_EPHEMERAL) $(SANDBOX_OPTIONAL_
 # Shared docker build arguments (non-npm packages and runtime config only)
 DOCKER_BUILD_ARGS := \
 	--build-arg ENGRAM_VERSION=$(ENGRAM_VERSION) \
-	--build-arg HOST_NAME=$(HOST_NAME) \
 	--build-arg USER_ID=$$(id -u) \
 	--build-arg GROUP_ID=$(SANDBOX_GID) \
 	--build-arg DOCKER_GROUP=$(DOCKER_GID)
@@ -179,7 +182,7 @@ DOCKER_BUILD_ARGS := \
 IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
 
 # Files included in package archive
-PACKED_FILES := env.example Dockerfile .dockerignore Makefile test.sh README.md package.json requirements.txt
+PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
 .PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash clean image custom-image run-tests run-servers server package update-versions check-versions tag-version validate test-makefile run-ephemeral
@@ -223,7 +226,6 @@ image: # Build a fresh OpenCode sandbox
 	@$(call color_msg,Building image: $(IMAGE_NAME)...)
 	@$(call color_msg,Build arguments:)
 	@printf '  -> ENGRAM_VERSION: %s\n' '$(ENGRAM_VERSION)'
-	@printf '  -> HOST_NAME: %s\n' '$(HOST_NAME)'
 	@printf '  -> USER_ID: %s\n' '$(shell id -u)'
 	@printf '  -> GROUP_ID: %s\n' '$(SANDBOX_GID)'
 	@printf '  -> DOCKER_GROUP: %s\n' '$(DOCKER_GID)'
@@ -260,14 +262,35 @@ latest: run # Run OpenCode sandboxed with latest tag
 bash: # Run a bash shell
 	docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest /bin/bash
 
+# Check server credentials for known-weak values (overridable)
+define check_server_credentials
+if [ "$(ALLOW_WEAK_SERVER_CREDENTIALS)" != "1" ]; then \
+	if [ "$(OPENCODE_SERVER_PASSWORD)" = "changeme" ] || [ "$(OPENCODE_SERVER_PASSWORD)" = "$(OPENCODE_SERVER_USERNAME)" ]; then \
+		$(call error_msg,ERROR: refusing weak OPENCODE_SERVER_PASSWORD (equals username or 'changeme')); \
+		echo "       Set a strong password in .env, or override with ALLOW_WEAK_SERVER_CREDENTIALS=1"; \
+		exit 1; \
+	fi; \
+fi
+endef
+
+# Export credentials to recipe environments so the server target can pass
+# them via --env-file (instead of leaking them on the docker CLI / process list)
+export OPENCODE_SERVER_USERNAME
+export OPENCODE_SERVER_PASSWORD
+
 server: preflight-run # Run OpenCode server in the current directory
 	@test -n "$(OPENCODE_SERVER_PASSWORD)" || { $(call error_msg,ERROR: OPENCODE_SERVER_PASSWORD must be set); exit 1; }
-	@$(call color_msg,Running server in $(PROJECT_NAME) with username $(OPENCODE_SERVER_USERNAME) and password $(OPENCODE_SERVER_PASSWORD) on port $(SERVER_PORT):)
+	@$(call check_server_credentials)
+	@$(call color_msg,Running server in $(PROJECT_NAME) as $(OPENCODE_SERVER_USERNAME) on $(SERVER_BIND):$(SERVER_PORT))
 	@$(call show_image_tag,$(IMAGE_TAG))
-	@docker run --init --rm -it \
-		-e OPENCODE_SERVER_USERNAME=$(OPENCODE_SERVER_USERNAME) \
-		-e OPENCODE_SERVER_PASSWORD=$(OPENCODE_SERVER_PASSWORD) \
-		-p $(SERVER_PORT):$(SERVER_PORT) \
+	@envfile="$$(mktemp)" \
+	&& trap 'rm -f "$$envfile"' EXIT INT TERM \
+	&& printf '%s=%s\n' "OPENCODE_SERVER_USERNAME" "$$OPENCODE_SERVER_USERNAME" > "$$envfile" \
+	&& printf '%s=%s\n' "OPENCODE_SERVER_PASSWORD" "$$OPENCODE_SERVER_PASSWORD" >> "$$envfile" \
+	&& chmod 600 "$$envfile" \
+	&& docker run --init --rm -it \
+		--env-file "$$envfile" \
+		-p $(SERVER_BIND):$(SERVER_PORT):$(SERVER_PORT) \
 		$(SANDBOX_MOUNTS) \
 		$(IMAGE_NAME):$(IMAGE_TAG) \
 		/bin/bash -c "cd /$(PROJECT_NAME) && opencode serve --port $(SERVER_PORT) --hostname 0.0.0.0"

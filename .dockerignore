@@ -4,5 +4,6 @@
 # ...except the required package files...
 !requirements.txt
 !package.json
+!docker-entrypoint.sh
 # .. and optional certificate files
 !*.pem
