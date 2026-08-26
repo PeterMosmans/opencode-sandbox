@@ -109,6 +109,10 @@ define status_msg
 printf '%b%s%b\n' '$(GREEN)' '$1:' '$(RESET)'
 endef
 
+define green_msg
+printf '%b%b%b\n' '$(GREEN)' '$1' '$(RESET)'
+endef
+
 define error_msg
 printf '%b%s%b\n' '$(RED)' '$1' '$(RESET)'
 endef
@@ -178,7 +182,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example Dockerfile .dockerignore Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash test clean image custom-image run-tests run-servers server package update-versions check-versions tag-version validate test-makefile run-ephemeral
+.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash clean image custom-image run-tests run-servers server package update-versions check-versions tag-version validate test-makefile run-ephemeral
 
 # === Building ===
 
@@ -227,7 +231,7 @@ image: # Build a fresh OpenCode sandbox
 
 tag-version: # Tag the latest image with the opencode-ai version from package.json
 	@docker tag $(IMAGE_NAME):latest $(IMAGE_NAME):$(OPENCODE_VERSION)
-	@printf '%b%s%b %s\n' '$(GREEN)' 'Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION)' '$(RESET)'
+	@$(call green_msg,Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION))
 
 custom-image: # Build image from alternative Dockerfile with different name
 	@test -f Dockerfile.custom || { $(call error_msg,ERROR: Dockerfile.custom not found); exit 1; }
@@ -323,7 +327,7 @@ remove: # Remove all sandbox image variants (tags and untagged)
 
 package: # Create a zip archive with all files needed to build and test the image, named with version tag
 	@zip -q "sandbox-$(IMAGE_TAG).zip" $(PACKED_FILES)
-	@printf '%b%s%b: %s\n' '$(GREEN)' 'Created' '$(RESET)' '"sandbox-$(IMAGE_TAG).zip"'
+	@$(call status_msg,Created sandbox-$(IMAGE_TAG).zip)
 
 # === Version Management ===
 

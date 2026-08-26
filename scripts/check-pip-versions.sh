@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Peter Mosmans [Go Forward]
+# SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
 up_to_date=0

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Copyright (C) 2026 Peter Mosmans [Go Forward]
+// SPDX-License-Identifier: GPL-3.0-or-later
 'use strict';
 
 const fs = require('fs');
