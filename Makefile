@@ -115,6 +115,16 @@ DIND_SECURITY_FLAGS ?= --security-opt seccomp=unconfined --security-opt apparmor
 # 1 (default) = enforce; 0 = INSECURE escape hatch (verification disabled)
 STRICT_TLS ?= 1
 
+# Detach key sequence for interactive containers. Docker's default
+# (ctrl-p,ctrl-q) collides with the OpenCode TUI command palette (ctrl-p):
+# the attach proxy swallows the keypress or detaches the TUI. ctrl-@ (NUL)
+# is not used by any TUI; press it twice in quick succession to detach.
+# Set DETACH_KEYS= to disable detaching entirely (recent engines only;
+# Ctrl+C then exits the TUI, which ends the container).
+DETACH_KEYS ?= ctrl-@,ctrl-@
+# Flags shared by every interactive container run
+INTERACTIVE_FLAGS := --rm -it --detach-keys=$(DETACH_KEYS)
+
 # Test configuration
 TYPE ?= full
 
@@ -392,13 +402,13 @@ run: preflight-run # Run OpenCode sandboxed in the current directory
 	@$(call color_msg,Running sandbox image:)
 	@$(call show_image_tag,$(TAG))
 	@$(call show_lemonade)
-	@docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):$(TAG)
+	@docker run $(INTERACTIVE_FLAGS) $(SANDBOX_MOUNTS) $(IMAGE_NAME):$(TAG)
 
 run-ephemeral: # Run OpenCode sandboxed without .memory/ mappings (ephemeral)
 	@$(call color_msg,Running ephemeral sandbox image:)
 	@$(call show_image_tag,$(TAG))
 	@$(call show_lemonade)
-	docker run --rm -it $(SANDBOX_MOUNTS_EPHEMERAL) $(IMAGE_NAME):$(TAG)
+	docker run $(INTERACTIVE_FLAGS) $(SANDBOX_MOUNTS_EPHEMERAL) $(IMAGE_NAME):$(TAG)
 
 latest: TAG = latest
 latest: run # Run OpenCode sandboxed with latest tag
@@ -412,10 +422,10 @@ run-init: preflight-init # ONE-TIME initial run: mounts OpenCode config dir READ
 	@$(call color_msg,Running initial sandbox run - OpenCode config directory is WRITABLE:)
 	@$(call show_image_tag,$(TAG))
 	@$(call show_lemonade)
-	docker run --rm -it $(SANDBOX_MOUNTS_INIT) $(IMAGE_NAME):$(TAG)
+	docker run $(INTERACTIVE_FLAGS) $(SANDBOX_MOUNTS_INIT) $(IMAGE_NAME):$(TAG)
 
 bash: # Run a bash shell
-	docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest /bin/bash
+	docker run $(INTERACTIVE_FLAGS) $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest /bin/bash
 
 # Check server credentials for known-weak values (overridable)
 define check_server_credentials
@@ -443,7 +453,7 @@ server: preflight-run # Run OpenCode server in the current directory
 	&& printf '%s=%s\n' "OPENCODE_SERVER_USERNAME" "$$OPENCODE_SERVER_USERNAME" > "$$envfile" \
 	&& printf '%s=%s\n' "OPENCODE_SERVER_PASSWORD" "$$OPENCODE_SERVER_PASSWORD" >> "$$envfile" \
 	&& chmod 600 "$$envfile" \
-	&& docker run --init --rm -it \
+	&& docker run --init $(INTERACTIVE_FLAGS) \
 		--env-file "$$envfile" \
 		-p $(SERVER_BIND):$(SERVER_PORT):$(SERVER_PORT) \
 		$(SANDBOX_MOUNTS) \
@@ -452,7 +462,7 @@ server: preflight-run # Run OpenCode server in the current directory
 
 run-insecure: preflight-insecure # Run OpenCode sandboxed with FULL host Docker access: INSECURE - avoid, prefer run-dind
 	@$(call show_lemonade)
-	@docker run --rm -it \
+	@docker run $(INTERACTIVE_FLAGS) \
 		$(DOCKER_INSECURE_FLAGS) \
 		$(SANDBOX_MOUNTS) \
 		$(IMAGE_NAME)
@@ -462,7 +472,7 @@ run-dind: preflight-run # Run OpenCode sandboxed with a private rootless Docker 
 	@$(call color_msg,The daemon is namespaced and cannot touch the host Docker instance)
 	@$(call show_image_tag,$(TAG))
 	@$(call show_lemonade)
-	@docker run --rm -it \
+	@docker run $(INTERACTIVE_FLAGS) \
 		-e DIND=1 \
 		-e DIND_DATA_ROOT=/$(PROJECT_NAME)/.memory/dind \
 		$(DIND_DEVICE_FLAGS) \
@@ -482,7 +492,7 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 	@$(call color_msg,  Image: $(IMAGE_NAME))
 	@$(call color_msg,  Type:  $(TYPE))
 	@mkdir -p tests/ 2>/dev/null
-	@docker run --rm -it \
+	@docker run $(INTERACTIVE_FLAGS) \
 		$(SANDBOX_MOUNTS_EPHEMERAL) \
 		$(DIND_TEST_FLAGS) \
 	    -v $(CURDIR)/tests:/tests:rw \
@@ -496,7 +506,7 @@ run-servers: preflight-run # Test LLM server connectivity from inside Docker con
 	@$(call color_msg,Testing LLM server connectivity inside Docker container...)
 	@$(call color_msg,  Image: $(IMAGE_NAME))
 	@mkdir -p tests/ 2>/dev/null
-	@docker run --rm -it \
+	@docker run $(INTERACTIVE_FLAGS) \
 		$(SANDBOX_MOUNTS) \
 	    -v $(CURDIR)/tests:/tests:rw \
 		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
