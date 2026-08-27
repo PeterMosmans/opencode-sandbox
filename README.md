@@ -8,6 +8,9 @@ The goal of this project is to create a secure, sandboxed environment - where
 one can run OpenCode within a workspace, without touching any non-workspace
 files on the host.
 
+The security is as strong as the security of the virtualization layer (Docker)
+itself.
+
 ## Features
 
 - **OpenCode** — AI-powered coding agent
@@ -23,18 +26,60 @@ image:
 
 ## Threat model
 
-The LLM and all files within the workspace ("user trust") are considered having
-a different trust level than the host operating system and Docker itself ("host
-trust"). The docker image enforces the boundary between the user and host trust.
+Two trust levels are separated:
 
-There is also the option to run Docker-in-Docker, where the container has its
-own private namespace within "user trust", separated from the host.
+- **User trust** — the LLM, and everything inside the workspace (project files,
+  `.env`, `.memory/` state, anything the agent writes and can read).
+- **Host trust** — the host operating system, Docker itself, and the files
+  outside the workspace (SSH keys, browser profiles, other projects).
 
-Build-time downloads (the Engram binary and the buildx plugin) are version-
-**and** checksum-pinned: the build fails closed on a mismatched or missing
-checksum. The Engram artifact is fetched from the canonical upstream repository
-(`github.com/Gentleman-Programming/engram`); refresh checksums together with
-version bumps (`curl -fsSL <url> | sha256sum`).
+The image enforces the boundary in the _user → host_ direction: normal runs get
+no access to the host Docker daemon, no mounts outside the workspace (plus a
+strictly read-only set of host configuration), and run as a non-root user.
+
+### What user trust can see and change
+
+Everything inside the workspace is fully readable **and writable** by the
+sandbox, by design — including secrets that live there:
+
+- `.env` (e.g. `OPENCODE_SERVER_PASSWORD`) is readable. If you keep secrets in
+  it, assume the agent can read them.
+- `~/.local/share/opencode/auth.json` (LLM API keys) is mounted **read-only** —
+  it cannot be modified, but it **is readable**. Granting the agent LLM access
+  means granting it the key.
+
+### Persistent state (survives sessions)
+
+Project-local state under `.memory/` persists across runs and shapes future
+sessions: Engram memories (`engram.db`), the codebase knowledge graph, the
+OpenCode session database and prompt history, and DinD images/containers
+(`.memory/dind/`). Treat these as **trusted-but-influenceable**: content an
+agent (or a malicious prompt it processed) writes into memory today is trusted
+input for every future session. Deleting `.memory/` resets the agent environment
+entirely.
+
+### The run-init trust window
+
+`make run-init` is the one target that mounts `~/.config/opencode` (skills,
+agents, rules) **read-write**. Anything written there becomes trusted, read-only
+configuration for _all future sessions_. Run it yourself first, review what was
+created, then hand autonomy to the agent.
+
+### Platform notes
+
+| Platform               | Notes                                                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Linux                  | Full experience; unprivileged user namespaces required for DinD                                                                                                                |
+| WSL2                   | Same as Linux; may need `kernel.unprivileged_userns_clone=1` (Debian) or `kernel.apparmor_restrict_unprivileged_userns=0` (Ubuntu 24.04+)                                      |
+| macOS / Docker Desktop | No `/dev/fuse` (DinD falls back to the slower `vfs` storage driver) and no `/dev/net/tun` (DinD containers share the sandbox's network namespace instead of getting their own) |
+
+### Supply chain
+
+- Build-time downloads (the Engram binary and the buildx plugin) are version-
+  **and** checksum-pinned: the build fails closed on a mismatched or missing
+  checksum.
+- The base image (`node:24-trixie-slim`) is pinned by digest — refresh it
+  deliberately with the registry query documented in the Dockerfile.
 
 ## Architecture
 
