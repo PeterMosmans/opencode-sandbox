@@ -4,7 +4,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # 1: Use a nice slim Debian-based image
-FROM node:24-trixie-slim
+# Pinned by digest (multi-arch manifest list). Refresh deliberately: query the
+# new digest, update it here, and re-run the checksum verification flow.
+#   curl -fsSL "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/node:pull" \
+#     | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' > /tmp/token
+#   curl -fsSL -H "Authorization: Bearer $(cat /tmp/token)" \
+#     -H "Accept: application/vnd.oci.image.index.v1+json" \
+#     -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+#     -D - -o /dev/null "https://registry-1.docker.io/v2/library/node/manifests/24-trixie-slim" \
+#     | grep -i docker-content-digest
+FROM node:24-trixie-slim@sha256:ab3eebe934147fee049b5eb83c570f68c849a13c930bdfa482de99fcdfa3b3de
 
 ARG USER_ID=1001
 ARG GROUP_ID=1001
@@ -84,7 +93,6 @@ RUN apt-get update && \
     shellcheck \
     slirp4netns \
     sshpass \
-    sudo \
     tree \
     uidmap \
     unzip \
