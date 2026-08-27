@@ -4,9 +4,9 @@ An all-in-one, Docker-based sandboxed environment for running
 [OpenCode](https://opencode.ai) with additional development tools and MCP
 servers pre-installed.
 
-The goal of this project is to create a immutable, secure, sandboxed
-environment - where one can run OpenCode within a workspace, without
-touching any non-workspace files on the host.
+The goal of this project is to create a secure, sandboxed environment - where
+one can run OpenCode within a workspace, without touching any non-workspace
+files on the host.
 
 ## Features
 
@@ -14,7 +14,8 @@ touching any non-workspace files on the host.
 - **Prettier, Biome, Ruff, Stylelint** — Linters and formatters
 - **ShellCheck, yamllint** — Shell and YAML linting
 
-Furthermore some MCP servers are pre-installed, and can be run straight from the image:
+Furthermore some MCP servers are pre-installed, and can be run straight from the
+image:
 
 - **agent-browser** — Browser automation via Playwright
 - **Engram** — Persistent memory MCP server
@@ -22,14 +23,18 @@ Furthermore some MCP servers are pre-installed, and can be run straight from the
 
 ## Threat model
 
-The LLM and all files within the workspace ("user trust") are
-considered having a different trust level than the host operating
-system and Docker itself ("host trust"). The docker image enforces the
-boundary between the user and host trust.
+The LLM and all files within the workspace ("user trust") are considered having
+a different trust level than the host operating system and Docker itself ("host
+trust"). The docker image enforces the boundary between the user and host trust.
 
-There is also the option to run Docker-in-Docker, where the container
-has its own private namespace within "user trust", separated from the
-host.
+There is also the option to run Docker-in-Docker, where the container has its
+own private namespace within "user trust", separated from the host.
+
+Build-time downloads (the Engram binary and the buildx plugin) are version-
+**and** checksum-pinned: the build fails closed on a mismatched or missing
+checksum. The Engram artifact is fetched from the canonical upstream repository
+(`github.com/Gentleman-Programming/engram`); refresh checksums together with
+version bumps (`curl -fsSL <url> | sha256sum`).
 
 ## Architecture
 
@@ -50,10 +55,10 @@ OPENCODE_CONFIG_DIR=/home/node/.config/opencode
 The project directory where opencode-sandbox is started, is mounted as
 read-write project root ("user trust")
 
-Project-specific files like prompts, sessions, and Docker-in-Docker
-artifacts, are stored within the project directory itself, under the
-`.memory` directory. This allows you to store and resume sessions
-while still having a sandboxed environment.
+Project-specific files like prompts, sessions, and Docker-in-Docker artifacts,
+are stored within the project directory itself, under the `.memory` directory.
+This allows you to store and resume sessions while still having a sandboxed
+environment.
 
 ```
 $(PROJECT_ROOT)/.memory/codebase-memory-mcp/:/home/node/codebase-memory-mcp/:rw
@@ -88,13 +93,12 @@ cp env.example .env
 make image
 ```
 
-On a fresh machine where OpenCode has never been executed, the
-OpenCode configuration directory might not exist yet or is still
-empty. Use the one-time `make run-init` for the initial run: it
-creates the directory if needed and mounts it read-write, so OpenCode
-can bootstrap its own configuration files. Optionally, place a seed
-`opencode.json` there in advance — that is the only file allowed to
-pre-exist. Anything else blocks the bootstrap run (override with
+On a fresh machine where OpenCode has never been executed, the OpenCode
+configuration directory might not exist yet or is still empty. Use the one-time
+`make run-init` for the initial run: it creates the directory if needed and
+mounts it read-write, so OpenCode can bootstrap its own configuration files.
+Optionally, place a seed `opencode.json` there in advance — that is the only
+file allowed to pre-exist. Anything else blocks the bootstrap run (override with
 FORCE=1).
 
 ```bash
@@ -115,36 +119,35 @@ Afterwards, use `make run` as usual.
 | `make run-dind`     | private rootless daemon        | sandbox only          |
 | `make run-insecure` | **host** daemon (socket mount) | **game over — avoid** |
 
-`make run-dind` starts a user-namespaced dockerd *inside* the container
-(rootlesskit + slirp4netns + fuse-overlayfs). The agent can build and run
-images fully autonomously, but there is no path to the host Docker instance.
-Images and containers persist in `.memory/dind/`.
+`make run-dind` starts a user-namespaced dockerd _inside_ the container
+(rootlesskit + slirp4netns + fuse-overlayfs). The agent can build and run images
+fully autonomously, but there is no path to the host Docker instance. Images and
+containers persist in `.memory/dind/`.
 
 ### `make run-dind`
 
-This is the preferred way if you want to use Docker within the
-OpenCode environment. It requires unprivileged user namespaces on the
-host kernel (default on Linux, WSL2 and Docker Desktop).
+This is the preferred way if you want to use Docker within the OpenCode
+environment. It requires unprivileged user namespaces on the host kernel
+(default on Linux, WSL2 and Docker Desktop).
 
 If startup fails with "operation not permitted":
-  - Debian family / WSL: `sudo sysctl -w kernel.unprivileged_userns_clone=1`
-  - Ubuntu 24.04+: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`
 
-DIND runs relax the outer seccomp filter (`seccomp=unconfined`)
-because the engine default blocks nested namespace/mount primitives,
-and disable `no-new-privileges` (default-on since Engine 25) so the
-setuid UID-map helpers work. The sandbox boundaries are unaffected: no
-host Docker socket, namespaced daemon, non-root user. Override with
-`DIND_SECURITY_FLAGS=`. Without `/dev/fuse`, the daemon falls back to
-the slower `vfs` storage driver. Override device flags with
-`DIND_DEVICE_FLAGS=` or pass extras via `DIND_EXTRA_FLAGS=`.  `docker
-compose` is not installed; port publishing uses rootlesskit's builtin
+- Debian family / WSL: `sudo sysctl -w kernel.unprivileged_userns_clone=1`
+- Ubuntu 24.04+: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`
+
+DIND runs relax the outer seccomp filter (`seccomp=unconfined`) because the
+engine default blocks nested namespace/mount primitives, and disable
+`no-new-privileges` (default-on since Engine 25) so the setuid UID-map helpers
+work. The sandbox boundaries are unaffected: no host Docker socket, namespaced
+daemon, non-root user. Override with `DIND_SECURITY_FLAGS=`. Without
+`/dev/fuse`, the daemon falls back to the slower `vfs` storage driver. Override
+device flags with `DIND_DEVICE_FLAGS=` or pass extras via `DIND_EXTRA_FLAGS=`.
+`docker compose` is not installed; port publishing uses rootlesskit's builtin
 port driver.
 
-If startup fails with `chmod .../.memory/dind: operation not permitted`,
-the `.memory` tree contains entries owned by a different user than the
-one running make. The preflight checks catch this before Docker starts —
-fix it once with:
+If startup fails with `chmod .../.memory/dind: operation not permitted`, the
+`.memory` tree contains entries owned by a different user than the one running
+make. The preflight checks catch this before Docker starts — fix it once with:
 
 ```bash
 sudo chown -R "$(id -u):$(id -g)" .memory
@@ -152,10 +155,10 @@ sudo chown -R "$(id -u):$(id -g)" .memory
 
 ### `make run-insecure`
 
-There is also an **insecure** version, `make run-insecure`, which gives
-the OpenCode container access to the host Docker daemon. **Please note
-that this is not secure**, and would allow (any process within)
-OpenCode to break out of the sandbox easily. Prefer `make run-dind`.
+There is also an **insecure** version, `make run-insecure`, which gives the
+OpenCode container access to the host Docker daemon. **Please note that this is
+not secure**, and would allow (any process within) OpenCode to break out of the
+sandbox easily. Prefer `make run-dind`.
 
 This will map the following additional files/sockets:
 
@@ -201,40 +204,39 @@ make image     # Build without preflight checks
 make run-tests # Run tests
 ```
 
-`make image` stages the exact build inputs into an isolated
-`.build-context/` directory first, so the Docker build never walks the
-workspace — workspace entries owned by other users (e.g. `.memory/`)
-cannot break the build. The staging directory is removed after a
-successful build (kept for inspection when the build fails; `make clean`
-also removes it).
+`make image` stages the exact build inputs into an isolated `.build-context/`
+directory first, so the Docker build never walks the workspace — workspace
+entries owned by other users (e.g. `.memory/`) cannot break the build. The
+staging directory is removed after a successful build (kept for inspection when
+the build fails; `make clean` also removes it).
 
 ### Run
 
 ```bash
-make run            # Run OpenCode sandbox (no Docker access)
-make run-dind       # Run with a private rootless Docker daemon (recommended)
-make run-insecure   # Run with host Docker socket access (INSECURE, see above)
-make latest         # Run with "latest" tag
-make bash           # Start a bash shell in the sandbox
-make server         # Run OpenCode server (requires OPENCODE_SERVER_PASSWORD)
+make run          # Run OpenCode sandbox (no Docker access)
+make run-dind     # Run with a private rootless Docker daemon (recommended)
+make run-insecure # Run with host Docker socket access (INSECURE, see above)
+make latest       # Run with "latest" tag
+make bash         # Start a bash shell in the sandbox
+make server       # Run OpenCode server (requires OPENCODE_SERVER_PASSWORD)
 ```
 
 ### Test
 
 ```bash
-make run-tests                    # Run the complete tiered chain (default)
-make run-tests TYPE=dind          # Run only the rootless Docker-in-Docker chain
-make run-tests TYPE=updates       # Only check for package updates (advisory)
-./test.sh [IMAGE_NAME] [TYPE]     # Run tests locally
+make run-tests                # Run the complete tiered chain (default)
+make run-tests TYPE=dind      # Run only the rootless Docker-in-Docker chain
+make run-tests TYPE=updates   # Only check for package updates (advisory)
+./test.sh [IMAGE_NAME] [TYPE] # Run tests locally
 ```
 
-The `full` chain runs from cheap to expensive — static checks, local infra,
-LLM server reachability, then the agent-browser/playwright end-to-end tests
-— and stops when it no longer makes sense to continue: end-to-end steps are
-gated on their dependencies passing in the same run. Skipped steps appear in
-the summary with a reason, and the exit code reflects real failures only.
-The `dind` chain never touches the host daemon; via make it starts its own
-private rootless daemon for you.
+The `full` chain runs from cheap to expensive — static checks, local infra, LLM
+server reachability, then the agent-browser/playwright end-to-end tests — and
+stops when it no longer makes sense to continue: end-to-end steps are gated on
+their dependencies passing in the same run. Skipped steps appear in the summary
+with a reason, and the exit code reflects real failures only. The `dind` chain
+never touches the host daemon; via make it starts its own private rootless
+daemon for you.
 
 ## License
 
