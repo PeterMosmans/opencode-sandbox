@@ -11,11 +11,14 @@ ARG GROUP_ID=1001
 ARG DOCKER_GROUP=111
 # Browser versions
 ARG ENGRAM_VERSION
+# Docker buildx CLI plugin (pinned; latest stable from github.com/docker/buildx/releases)
+ARG BUILDX_VERSION
 
 # Set some sane OpenCode and Openspec defaults
+ENV DO_NOT_TRACK=1
 ENV OPENSPEC_TELEMETRY=0
 ENV OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS=36000000
-ENV OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=262144
+# ENV OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=262144
 ENV OPENCODE_CONFIG_DIR=/home/node/.config/opencode
 ENV OPENCODE_DISABLE_AUTOUPDATE=true
 # Enable websearch - see https://opencode.ai/docs/tools/#websearch
@@ -86,6 +89,18 @@ RUN apt-get update && \
     zip \
     zsh && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# 4b: Install the buildx CLI plugin (pinned).
+# Without it, 'docker build' inside the rootless DinD daemon falls back to the
+# deprecated legacy builder (see https://docs.docker.com/go/buildx/). Once the
+# plugin exists, Engine >= 23 auto-selects BuildKit through the default
+# docker-driver: no further configuration is needed.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    install -D -m 0755 /dev/null /usr/local/lib/docker/cli-plugins/docker-buildx; \
+    curl -fsSL \
+        "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${arch}" \
+        -o /usr/local/lib/docker/cli-plugins/docker-buildx
 
 # 5: Ensure required groups exist.
 # Groups are keyed by GID (the docker group must match the HOST's docker GID,
