@@ -277,16 +277,14 @@ DOCKER_BUILD_ARGS := \
 override BUILD_CONTEXT := .build-context
 BUILD_CONTEXT_FILES := Dockerfile docker-entrypoint.sh dockerd-sandboxed.sh package.json requirements.txt .dockerignore
 
-# Guarded removal of the staging directory: refuses to run unless the value
-# is a sane, relative, non-trivial path (defends against future edits that
-# might weaken the override guarantee)
+# Guarded removal of the staging directory: refuses ONLY unsafe values
+# (empty, '.', '/'); a non-existent directory is a fine no-op for rm -rf.
 define remove_build_context
-	if [ -n "$(BUILD_CONTEXT)" ] && [ "$(BUILD_CONTEXT)" != "." ] && [ "$(BUILD_CONTEXT)" != "/" ] && [ -d "$(BUILD_CONTEXT)" ]; then \
-		rm -rf -- './$(BUILD_CONTEXT)'; \
-	else \
-		printf '  refusing unsafe rm: BUILD_CONTEXT="%s"\n' '$(BUILD_CONTEXT)'; \
+	if [ -z "$(BUILD_CONTEXT)" ] || [ "$(BUILD_CONTEXT)" = "." ] || [ "$(BUILD_CONTEXT)" = "/" ]; then \
+		printf '  refusing unsafe rm: BUILD_CONTEXT="%s" is not a safe path\n' '$(BUILD_CONTEXT)'; \
 		exit 1; \
-	fi
+	fi; \
+	rm -rf -- './$(BUILD_CONTEXT)'
 endef
 
 # Compare one pinned checksum against an upstream checksums.txt manifest.
