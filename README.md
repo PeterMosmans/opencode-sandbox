@@ -109,11 +109,11 @@ Afterwards, use `make run` as usual.
 
 ## Docker Access Modes
 
-| Mode               | Daemon                         | Escape reach          |
-| ------------------ | ------------------------------ | --------------------- |
-| `make run`         | none                           | sandbox only          |
-| `make run-dind`    | private rootless daemon        | sandbox only          |
-| `make elevated`    | **host** daemon (socket mount) | **game over — avoid** |
+| Mode                | Daemon                         | Escape reach          |
+| ------------------- | ------------------------------ | --------------------- |
+| `make run`          | none                           | sandbox only          |
+| `make run-dind`     | private rootless daemon        | sandbox only          |
+| `make run-insecure` | **host** daemon (socket mount) | **game over — avoid** |
 
 `make run-dind` starts a user-namespaced dockerd *inside* the container
 (rootlesskit + slirp4netns + fuse-overlayfs). The agent can build and run
@@ -141,12 +141,21 @@ the slower `vfs` storage driver. Override device flags with
 compose` is not installed; port publishing uses rootlesskit's builtin
 port driver.
 
-### `make run-elevated`
+If startup fails with `chmod .../.memory/dind: operation not permitted`,
+the `.memory` tree contains entries owned by a different user than the
+one running make. The preflight checks catch this before Docker starts —
+fix it once with:
 
-There is also an **elevated** version, `make run-elevated`, which gives
+```bash
+sudo chown -R "$(id -u):$(id -g)" .memory
+```
+
+### `make run-insecure`
+
+There is also an **insecure** version, `make run-insecure`, which gives
 the OpenCode container access to the host Docker daemon. **Please note
 that this is not secure**, and would allow (any process within)
-OpenCode to break out of the sandbox easily.
+OpenCode to break out of the sandbox easily. Prefer `make run-dind`.
 
 This will map the following additional files/sockets:
 
@@ -170,6 +179,7 @@ cp env.example .env
 | -------------------------- | ---------------- | ---------------------------------------------------- |
 | `ALLOW_WEAK_SERVER_CREDENTIALS` | `0`         | Set to `1` to allow weak server credentials          |
 | `ENGRAM_VERSION`           | `1.20.0`         | Version of the Engram binary to download             |
+| `BUILDX_VERSION`           | `0.36.1`         | buildx plugin version (BuildKit inside rootless DinD)|
 | `GROUP`                    | default group    | Group name to be used in Docker container            |
 | `HOST_LEMONADE`            | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev) |
 | `LEMONADE_HOST`            | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)    |
@@ -191,22 +201,30 @@ make run-tests # Run tests
 ### Run
 
 ```bash
-make run           # Run OpenCode sandbox (no Docker access)
-make run-dind      # Run with a private rootless Docker daemon (recommended)
-make run-elevated  # Run with host Docker socket access (INSECURE, see above)
-make latest        # Run with "latest" tag
-make bash          # Start a bash shell in the sandbox
-make server        # Run OpenCode server (requires OPENCODE_SERVER_PASSWORD)
+make run            # Run OpenCode sandbox (no Docker access)
+make run-dind       # Run with a private rootless Docker daemon (recommended)
+make run-insecure   # Run with host Docker socket access (INSECURE, see above)
+make latest         # Run with "latest" tag
+make bash           # Start a bash shell in the sandbox
+make server         # Run OpenCode server (requires OPENCODE_SERVER_PASSWORD)
 ```
 
 ### Test
 
 ```bash
-make run-tests                # Run all tests inside Docker
-make run-tests TYPE=linters   # Run only linter checks
-make run-tests TYPE=updates   # Check for package updates
-./test.sh [IMAGE_NAME] [TYPE] # Run tests locally
+make run-tests                    # Run the complete tiered chain (default)
+make run-tests TYPE=dind          # Run only the rootless Docker-in-Docker chain
+make run-tests TYPE=updates       # Only check for package updates (advisory)
+./test.sh [IMAGE_NAME] [TYPE]     # Run tests locally
 ```
+
+The `full` chain runs from cheap to expensive — static checks, local infra,
+LLM server reachability, then the agent-browser/playwright end-to-end tests
+— and stops when it no longer makes sense to continue: end-to-end steps are
+gated on their dependencies passing in the same run. Skipped steps appear in
+the summary with a reason, and the exit code reflects real failures only.
+The `dind` chain never touches the host daemon; via make it starts its own
+private rootless daemon for you.
 
 ## License
 

@@ -28,11 +28,12 @@ SHELL := /bin/bash
 # Detect platform for cross-platform compatibility
 IS_DARWIN := $(shell uname -s 2>/dev/null | grep -q Darwin && echo 1 || echo 0)
 
-# Docker elevated flags (Linux mounts docker binaries, macOS only mounts socket)
+# Host Docker access flags - used ONLY by run-insecure
+# (Linux mounts docker binaries, macOS only mounts socket)
 ifeq ($(IS_DARWIN),1)
-DOCKER_ELEVATED_FLAGS :=
+DOCKER_INSECURE_FLAGS :=
 else
-DOCKER_ELEVATED_FLAGS := --group-add docker -v /usr/bin/docker:/usr/bin/docker:ro -v /usr/libexec/docker:/usr/libexec/docker:ro -v /var/run/docker.sock:/var/run/docker.sock:ro
+DOCKER_INSECURE_FLAGS := --group-add docker -v /usr/bin/docker:/usr/bin/docker:ro -v /usr/libexec/docker:/usr/libexec/docker:ro -v /var/run/docker.sock:/var/run/docker.sock:ro
 endif
 
 # sed -i flag differs between macOS (requires empty suffix) and Linux
@@ -66,6 +67,7 @@ OPENCODE_VERSION ?= $(shell node -e "console.log(require('./package.json').depen
 OPENCODE_SERVER_USERNAME ?= $(shell id -u --name)
 OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
 ENGRAM_VERSION ?= 1.20.0
+BUILDX_VERSION ?= 0.36.1
 TARGET ?= example.com
 
 # Image tag defaults to "latest" for day-to-day builds. Override to tag
@@ -150,9 +152,26 @@ define show_image_tag
 printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(IMAGE_NAME):" "$(1)"
 endef
 
-# Create the .memory/ directory structure and placeholder session/prompt files
+# Create the .memory/ directory structure and placeholder session/prompt
+# files. Fails loudly when entries exist that are NOT owned by the invoking
+# user: rootless dockerd chmods .memory/dind and SQLite needs write access,
+# which breaks cryptically later when ownership belongs to some other UID
+# (e.g. leftovers from another account or CI run)
 define prepare_memory
 mkdir -p .memory/{codebase-memory-mcp,dind,engram,opencode} 2>/dev/null; \
+unowned=""; \
+for entry in .memory .memory/codebase-memory-mcp .memory/dind .memory/engram .memory/opencode \
+	.memory/opencode/opencode.db .memory/opencode/opencode.db-shm .memory/opencode/opencode.db-wal .memory/opencode/prompt-history.jsonl; do \
+	if [ -e "$$entry" ] && [ ! -O "$$entry" ]; then \
+		unowned="$$unowned $$entry"; \
+	fi; \
+done; \
+if [ -n "$$unowned" ]; then \
+	printf '%bERROR:%b .memory contains entries not owned by you (%s):\n' '$(RED)' '$(RESET)' "$$unowned"; \
+	echo "       Fix once with:"; \
+	echo "       sudo chown -R $$(id -u):$$(id -g) .memory"; \
+	exit 1; \
+fi; \
 touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
 endef
 
@@ -219,6 +238,7 @@ HOST_CONFIG_EXTRA := $(filter-out $(HOST_CONFIG_SEED),$(wildcard $(HOME)/.config
 # Shared docker build arguments (non-npm packages and runtime config only)
 DOCKER_BUILD_ARGS := \
 	--build-arg ENGRAM_VERSION=$(ENGRAM_VERSION) \
+	--build-arg BUILDX_VERSION=$(BUILDX_VERSION) \
 	--build-arg USER_ID=$$(id -u) \
 	--build-arg GROUP_ID=$(SANDBOX_GID) \
 	--build-arg DOCKER_GROUP=$(DOCKER_GID)
@@ -230,7 +250,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-init preflight-elevated build run latest run-init run-ephemeral run-elevated bash clean image custom-image run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
+.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image custom-image run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
 
 # === Building ===
 
@@ -247,12 +267,12 @@ preflight: # Check prerequisites before building
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run)); exit 1; }
 	@$(call status_msg,All preflight checks passed)
 
-preflight-run: # Check prerequisites for run and elevated commands
+preflight-run: # Check prerequisites for run commands
 	@$(call bold_msg,Running preflight checks for run...)
 	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR)) — this would map your entire home into the sandbox); exit 1; }
-	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run/)); exit 1; }
+	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run)); exit 1; }
 	@$(call prepare_memory)
-	@$(call status_msg,All run/elevated preflight checks passed)
+	@$(call status_msg,All run preflight checks passed)
 
 preflight-init: # Check prerequisites for the one-time initial bootstrap run
 	@$(call bold_msg,Running preflight checks for initial run...)
@@ -261,15 +281,15 @@ preflight-init: # Check prerequisites for the one-time initial bootstrap run
 	@$(call prepare_memory)
 	@$(call status_msg,All initial-run preflight checks passed)
 
-preflight-elevated: preflight-run # Additional checks for elevated command
-	@$(call bold_msg,Running preflight checks for elevated...)
+preflight-insecure: preflight-run # Additional checks before the INSECURE host-Docker run
+	@$(call bold_msg,Running preflight checks for INSECURE mode...)
 ifeq ($(IS_DARWIN),1)
-	@test -f /usr/local/bin/docker || { $(call error_msg,ERROR: /usr/local/bin/docker not found (Docker Desktop required for elevated)); exit 1; }
+	@test -f /usr/local/bin/docker || { $(call error_msg,ERROR: /usr/local/bin/docker not found (Docker Desktop required for INSECURE mode)); exit 1; }
 else
-	@test -f /usr/bin/docker || { $(call error_msg,ERROR: /usr/bin/docker not found (required for elevated)); exit 1; }
-	@test -d /usr/libexec/docker || { $(call error_msg,ERROR: /usr/libexec/docker directory not found (required for elevated)); exit 1; }
+	@test -f /usr/bin/docker || { $(call error_msg,ERROR: /usr/bin/docker not found (required for INSECURE mode)); exit 1; }
+	@test -d /usr/libexec/docker || { $(call error_msg,ERROR: /usr/libexec/docker directory not found (required for INSECURE mode)); exit 1; }
 endif
-	@$(call status_msg,All elevated preflight checks passed)
+	@$(call status_msg,All INSECURE-mode preflight checks passed)
 
 build: preflight image # Build a fresh OpenCode sandbox (with preflight check)
 
@@ -277,6 +297,7 @@ image: # Build a fresh OpenCode sandbox
 	@$(call color_msg,Building image: $(IMAGE_NAME)...)
 	@$(call color_msg,Build arguments:)
 	@printf '  -> ENGRAM_VERSION: %s\n' '$(ENGRAM_VERSION)'
+	@printf '  -> BUILDX_VERSION: %s\n' '$(BUILDX_VERSION)'
 	@printf '  -> USER_ID: %s\n' '$(shell id -u)'
 	@printf '  -> GROUP_ID: %s\n' '$(SANDBOX_GID)'
 	@printf '  -> DOCKER_GROUP: %s\n' '$(DOCKER_GID)'
@@ -357,10 +378,10 @@ server: preflight-run # Run OpenCode server in the current directory
 		$(IMAGE_NAME):$(IMAGE_TAG) \
 		/bin/bash -c "cd /$(PROJECT_NAME) && opencode serve --port $(SERVER_PORT) --hostname 0.0.0.0"
 
-run-elevated: preflight-elevated # Run OpenCode sandboxed with full host Docker access: INSECURE
+run-insecure: preflight-insecure # Run OpenCode sandboxed with FULL host Docker access: INSECURE - avoid, prefer run-dind
 	@$(call show_lemonade)
 	@docker run --rm -it \
-		$(DOCKER_ELEVATED_FLAGS) \
+		$(DOCKER_INSECURE_FLAGS) \
 		$(SANDBOX_MOUNTS) \
 		$(IMAGE_NAME)
 
@@ -379,7 +400,8 @@ run-dind: preflight-run # Run OpenCode sandboxed with a private rootless Docker 
 		$(IMAGE_NAME):$(TAG)
 
 # DIND test runs get a private daemon and deliberately NO host Docker socket,
-# proving the sandbox works without it
+# proving the sandbox works without it. Test runs NEVER use the host daemon:
+# there is no reason to perform an INSECURE host-Docker run just for testing.
 DIND_TEST_FLAGS := $(if $(filter dind,$(TYPE)),-e DIND=1 -e DIND_DATA_ROOT=/$(PROJECT_NAME)/.memory/dind $(DIND_DEVICE_FLAGS) $(DIND_SECURITY_FLAGS))
 
 run-tests: preflight-run # Run tests inside Docker container (make run-tests IMAGE=my-image TYPE=full)
@@ -390,7 +412,6 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 	@mkdir -p tests/ 2>/dev/null
 	@docker run --rm -it \
 		$(SANDBOX_MOUNTS_EPHEMERAL) \
-		$(if $(filter dind,$(TYPE)),,$(DOCKER_ELEVATED_FLAGS)) \
 		$(DIND_TEST_FLAGS) \
 	    -v $(CURDIR)/tests:/tests:rw \
 		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
@@ -405,7 +426,6 @@ run-servers: preflight-run # Test LLM server connectivity from inside Docker con
 	@mkdir -p tests/ 2>/dev/null
 	@docker run --rm -it \
 		$(SANDBOX_MOUNTS) \
-		$(DOCKER_ELEVATED_FLAGS) \
 	    -v $(CURDIR)/tests:/tests:rw \
 		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
 		-u $$(id -u):$(SANDBOX_GID) \
