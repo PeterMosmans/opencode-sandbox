@@ -11,6 +11,10 @@
 # ~/.config/opencode - contains OpenCode configuration (set using OPENCODE_CONFIG_DIR)
 # ~/.gitconfig
 #
+# Exception: make run-init shares ~/.config/opencode READ-WRITE ONCE, so that
+# OpenCode can bootstrap its own configuration on a fresh machine. Regular
+# runs keep it strictly read-only
+#
 # The following files/directories are exclusive within the project directory
 # .memory/codebase-memory-mcp - (set using CBM_CACHE_DIR)
 # .memory/opencode - OpenCode session database and prompt history
@@ -146,6 +150,12 @@ define show_image_tag
 printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(IMAGE_NAME):" "$(1)"
 endef
 
+# Create the .memory/ directory structure and placeholder session/prompt files
+define prepare_memory
+mkdir -p .memory/{codebase-memory-mcp,dind,engram,opencode} 2>/dev/null; \
+touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
+endef
+
 # === Derived Variables ===
 
 # Group ID for sandboxed runs
@@ -184,6 +194,28 @@ SANDBOX_MOUNTS := $(SANDBOX_BASE_MOUNTS) $(SANDBOX_OPTIONAL_MOUNTS)
 # Ephemeral mounts (no .memory/ mappings)
 SANDBOX_MOUNTS_EPHEMERAL := $(SANDBOX_BASE_MOUNTS_EPHEMERAL) $(SANDBOX_OPTIONAL_MOUNTS)
 
+# Initial bootstrap mounts (see run-init): identical to SANDBOX_BASE_MOUNTS,
+# except that the OpenCode configuration directory is mounted READ-WRITE
+SANDBOX_BASE_MOUNTS_INIT := -u $$(id -u):$(SANDBOX_GID) \
+	-e OPENCODE_CONFIG_DIR=/home/node/.config/opencode \
+	-v $(PROJECT_ROOT)/.memory/codebase-memory-mcp/:/home/node/codebase-memory-mcp/:rw \
+	-v $(PROJECT_ROOT)/.memory/engram/:/home/node/.engram/:rw \
+	-v $(PROJECT_ROOT)/.memory/opencode/prompt-history.jsonl:/home/node/.local/state/opencode/prompt-history.jsonl:rw \
+	-v $(PROJECT_ROOT)/.memory/opencode/opencode.db:/home/node/.local/share/opencode/opencode.db:rw \
+	-v $(PROJECT_ROOT)/.memory/opencode/opencode.db-shm:/home/node/.local/share/opencode/opencode.db-shm:rw \
+	-v $(PROJECT_ROOT)/.memory/opencode/opencode.db-wal:/home/node/.local/share/opencode/opencode.db-wal:rw \
+	-v $(PROJECT_ROOT):/$(PROJECT_NAME):rw \
+	-v ~/.config/opencode:/home/node/.config/opencode:rw \
+	-w /$(PROJECT_NAME)
+
+SANDBOX_MOUNTS_INIT := $(SANDBOX_BASE_MOUNTS_INIT) $(SANDBOX_OPTIONAL_MOUNTS)
+
+# Used by run-init to enforce that it only bootstraps a FRESH configuration:
+# a single seed opencode.json is allowed to exist, everything else means
+# the configuration directory is already in use
+HOST_CONFIG_SEED := $(HOME)/.config/opencode/opencode.json
+HOST_CONFIG_EXTRA := $(filter-out $(HOST_CONFIG_SEED),$(wildcard $(HOME)/.config/opencode/*))
+
 # Shared docker build arguments (non-npm packages and runtime config only)
 DOCKER_BUILD_ARGS := \
 	--build-arg ENGRAM_VERSION=$(ENGRAM_VERSION) \
@@ -198,7 +230,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-elevated build run latest elevated bash clean image custom-image run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile run-ephemeral
+.PHONY: help preflight preflight-run preflight-init preflight-elevated build run latest run-init run-ephemeral run-elevated bash clean image custom-image run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
 
 # === Building ===
 
@@ -219,9 +251,15 @@ preflight-run: # Check prerequisites for run and elevated commands
 	@$(call bold_msg,Running preflight checks for run...)
 	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR)) — this would map your entire home into the sandbox); exit 1; }
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run/)); exit 1; }
-	@mkdir -p .memory/{codebase-memory-mcp,dind,engram,opencode} 2>/dev/null; \
-	touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
+	@$(call prepare_memory)
 	@$(call status_msg,All run/elevated preflight checks passed)
+
+preflight-init: # Check prerequisites for the one-time initial bootstrap run
+	@$(call bold_msg,Running preflight checks for initial run...)
+	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR))); exit 1; }
+	@mkdir -p ~/.config/opencode
+	@$(call prepare_memory)
+	@$(call status_msg,All initial-run preflight checks passed)
 
 preflight-elevated: preflight-run # Additional checks for elevated command
 	@$(call bold_msg,Running preflight checks for elevated...)
@@ -272,6 +310,17 @@ run-ephemeral: # Run OpenCode sandboxed without .memory/ mappings (ephemeral)
 latest: TAG = latest
 latest: run # Run OpenCode sandboxed with latest tag
 
+# Identical to run, except that the OpenCode configuration directory is
+# mounted READ-WRITE (SANDBOX_MOUNTS_INIT) so OpenCode can bootstrap its own
+# configuration on a fresh machine. A single seed opencode.json may be placed
+# there in advance; any other content blocks it unless FORCE=1 is set
+run-init: preflight-init # ONE-TIME initial run: mounts OpenCode config dir READ-WRITE to bootstrap it
+	@test -z "$(HOST_CONFIG_EXTRA)" || [ "$(FORCE)" = "1" ] || { $(call error_msg,ERROR: $(HOME)/.config/opencode contains unexpected entries); echo "       Only a single seed opencode.json is allowed to pre-exist for a first run"; echo "       Remove other files - or re-run this target with FORCE=1 to keep them"; exit 1; }
+	@$(call color_msg,Running initial sandbox run - OpenCode config directory is WRITABLE:)
+	@$(call show_image_tag,$(TAG))
+	@$(call show_lemonade)
+	docker run --rm -it $(SANDBOX_MOUNTS_INIT) $(IMAGE_NAME):$(TAG)
+
 bash: # Run a bash shell
 	docker run --rm -it $(SANDBOX_MOUNTS) $(IMAGE_NAME):latest /bin/bash
 
@@ -308,7 +357,7 @@ server: preflight-run # Run OpenCode server in the current directory
 		$(IMAGE_NAME):$(IMAGE_TAG) \
 		/bin/bash -c "cd /$(PROJECT_NAME) && opencode serve --port $(SERVER_PORT) --hostname 0.0.0.0"
 
-elevated: preflight-elevated # Run OpenCode sandboxed with Docker access
+run-elevated: preflight-elevated # Run OpenCode sandboxed with full host Docker access: INSECURE
 	@$(call show_lemonade)
 	@docker run --rm -it \
 		$(DOCKER_ELEVATED_FLAGS) \
@@ -320,7 +369,6 @@ run-dind: preflight-run # Run OpenCode sandboxed with a private rootless Docker 
 	@$(call color_msg,The daemon is namespaced and cannot touch the host Docker instance)
 	@$(call show_image_tag,$(TAG))
 	@$(call show_lemonade)
-	@mkdir -p .memory/dind
 	@docker run --rm -it \
 		-e DIND=1 \
 		-e DIND_DATA_ROOT=/$(PROJECT_NAME)/.memory/dind \
