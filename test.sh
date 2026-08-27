@@ -5,7 +5,9 @@ set -euo pipefail
 # Test tracking
 PASS_COUNT=0
 FAIL_COUNT=0
+SKIP_COUNT=0
 FAILED_TESTS=""
+TEST_ENTRIES=""
 
 # Test script for OpenCode sandbox Docker images
 
@@ -14,11 +16,29 @@ FAILED_TESTS=""
 
 # Usage: ./test.sh [IMAGE_NAME] [TEST_TYPE] [MODE]
 #   IMAGE_NAME : Docker image to test (default: opencode-sandbox-$(id -u))
-#   TEST_TYPE  : Which tests to run: linters, agent, browsers, full, updates, servers, all (default: full)
+#   TEST_TYPE  : Chain to run (see CHAINS below; default: full)
 #   MODE       : bare (run commands directly) or docker (wrap in docker run, default)
 #   TARGET     : Host to screenshot (default: example.com)
 #
+# There are three test chains:
+#
+#   full    The complete tiered chain, ordered cheap -> expensive. It stops
+#           where continuing makes no sense; e2e steps are gated on their
+#           dependencies (config, servers, doctors) having PASSED earlier:
+#             T1 static      config, versions, linters
+#             T2 local infra doctors, host-endpoint, dind
+#             T3 LLM gate    server reachability (required providers)
+#             T4 tool E2E    agent-browser screenshot vs baseline
+#             T5 agent E2E   playwright screenshot via opencode run
+#             advisory last  package updates (informational)
+#   dind    Only the rootless Docker-in-Docker test. The private daemon is
+#           started automatically for you via make; never touches the host.
+#   updates npm/pip update check only (advisory, informational).
+#
+# Skipped steps are listed with a reason; the exit code reflects failures.
+#
 # Inside Docker (bare): make run-tests TYPE=full
+#                       make run-tests TYPE=dind
 # Locally (docker):     ./test.sh [IMAGE_NAME] [TYPE]
 
 BOLD=$'\033[1m'
@@ -34,9 +54,12 @@ MODE="${3:-docker}"
 HOST_PORT="${HOST_PORT:-8000}"
 # which host to screenshot
 TARGET="${TARGET:-example.com}"
-# CI color suppression
-CI_COLORS=true
-[[ ! -t 1 ]] && CI_COLORS=false
+# CI color suppression: defaults to TTY detection; a CI_COLORS value already
+# present in the environment (true|false) always wins
+if [ -z "${CI_COLORS:-}" ]; then
+  CI_COLORS=true
+  [[ ! -t 1 ]] && CI_COLORS=false
+fi
 # Pass along a GROUP
 ID="$(id -u)"
 GROUP="$(id -g --name)"
@@ -45,7 +68,12 @@ SANDBOX_GID="$(getent group "${GROUP}" | cut -d: -f3)"
 usage() {
   echo "Usage: $0 [IMAGE_NAME] [TEST_TYPE] [MODE]"
   echo "  IMAGE_NAME : Docker image to test (default: opencode-sandbox-\$(id -u))"
-  echo "  TEST_TYPE  : linters, agent, browsers, full, updates, servers, dind, all"
+  echo "  TEST_TYPE  : full (default) | dind | updates"
+  echo "               full    = T1 static -> T2 local infra -> T3 LLM gate"
+  echo "                       -> T4/T5 end-to-end agents -> updates (advisory)"
+  echo "               dind    = rootless Docker-in-Docker test only"
+  echo "                       (make sets up the private daemon automatically)"
+  echo "               updates = npm/pip package update check only"
   echo "  MODE       : bare (run directly) or docker (wrap in docker run)"
   exit 1
 }
@@ -90,59 +118,222 @@ run_cmd_shell() {
   fi
 }
 
+# === Test dependency tracking ===
+#
+# STATE mirrors the outcome of gate-providing steps (config, servers,
+# doctors): true on PASS, anything else means the step did not prove itself.
+# Steps declare which states they depend on; unmet dependencies are SKIPPED
+# with a reason instead of being run pointlessly.
+#
+# Skipping semantics: a step that returns success *without* exercising its
+# subject (e.g. servers skips when no config exists) intentionally leaves its
+# state false — downstream steps stay skipped, which is the honest outcome.
+
+declare -A STATE
+
+# Map a state key to an outcome: ["$key"]-style access needs quoting care
+is_state_true() {
+  [[ "${STATE[$1]:-false}" == "true" ]]
+}
+
+# Update a state key based on a test result (0 = pass)
+set_state() {
+  local key="$1"
+  local status="$2"
+  if [ "$status" -eq 0 ]; then
+    STATE[$key]="true"
+  else
+    STATE[$key]="false"
+  fi
+}
+
+# Check that all listed dependencies have passed; echo missing keys otherwise
+missing_dependencies() {
+  local dep
+  for dep in $1; do
+    is_state_true "$dep" || printf '%s ' "$dep"
+  done
+}
+
+# Run a single test with timing and result recording.
+#
+# Return-code protocol: 0 = PASS, any nonzero = FAIL, 2 = SKIP. Tests that
+# legitimately cannot exercise their subject (e.g. servers without config)
+# set SKIP_NOTE before returning 2; their step is then recorded as SKIP so a
+# vacuous pass can never satisfy a dependency gate. Returns the test's own
+# status; callers needing the outcome inspect $? — dispatchers use step().
+run_test() {
+  local test_name="$1"
+  shift
+  local start_time end_time duration rc
+  SKIP_NOTE=""
+  start_time="$(date +%s)"
+  if "$@"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  end_time="$(date +%s)"
+  duration=$((end_time - start_time))
+  local skip_note="${SKIP_NOTE:-}"
+  if [ "$rc" -eq 0 ]; then
+    record_result "$test_name" "PASS" "${duration}"
+  elif [ "$rc" -eq 2 ] && [ -n "$skip_note" ]; then
+    info "Skipping '${test_name}': ${skip_note}"
+    record_result "$test_name" "SKIP" "${duration}" "${skip_note}"
+  else
+    record_result "$test_name" "FAIL" "${duration}"
+    error "Test '${test_name}' failed (exit code: ${rc}, duration: ${duration}s)"
+  fi
+  return "$rc"
+}
+
+# Run one suite step, gated on its declared dependencies:
+#   step <name> "<space-separated dep keys>" <function>
+#
+# Sets STATE[<name>] to true only on a real PASS; FAIL *and* SKIP leave it
+# false. Always returns 0, so dispatchers can call it plainly under set -e.
+step() {
+  local name="$1"
+  local deps="$2"
+  shift 2
+  local missing
+  missing="$(missing_dependencies "$deps")"
+  if [ -n "$missing" ]; then
+    info "Skipping '${name}': dependency not met (${missing% })"
+    record_result "$name" "SKIP" 0 "dependency not met: ${missing% }"
+    STATE[$name]="false"
+    return 0
+  fi
+  local rc=0
+  run_test "$name" "$@" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    STATE[$name]="true"
+  else
+    STATE[$name]="false"
+  fi
+  return 0
+}
+
 record_result() {
   local test_name="$1"
   local status="$2"
   local duration="$3"
+  local note="${4:-}"
   local timestamp
   timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-  if [ "$status" = "FAIL" ]; then
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-    FAILED_TESTS="${FAILED_TESTS}${timestamp} - ${test_name} (${duration}s)\n"
+  case "$status" in
+    FAIL)
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      FAILED_TESTS="${FAILED_TESTS}${timestamp} - ${test_name} (${duration}s)\n"
+      ;;
+    SKIP)
+      SKIP_COUNT=$((SKIP_COUNT + 1))
+      ;;
+    *)
+      status="PASS"
+      PASS_COUNT=$((PASS_COUNT + 1))
+      ;;
+  esac
+  # Single place that owns the summary table rows; duration is raw seconds
+  if [ -n "$note" ] && [ "$status" != "PASS" ]; then
+    TEST_ENTRIES="${TEST_ENTRIES}${test_name}|${status}|${duration}s|${note}\n"
   else
-    PASS_COUNT=$((PASS_COUNT + 1))
+    TEST_ENTRIES="${TEST_ENTRIES}${test_name}|${status}|${duration}s|\n"
   fi
 }
 
+# === Summary table ===
+#
+# The table renders through ONE code path: cells are padded to the widest
+# content in their column FIRST, then (only when CI_COLORS is on) wrapped in
+# escape codes — escape sequences inside printf field widths would otherwise
+# break alignment.
+
+# Print text left-justified to a width, optionally color-wrapped AFTER padding
+emit_cell() {
+  local width="$1"
+  local text="$2"
+  local color="${3:-}"
+  local padded
+  padded="$(printf '%-*s' "$width" "$text")"
+  if [ "${CI_COLORS}" = "true" ] && [ -n "$color" ]; then
+    printf '%s' "${color}${padded}${RESET}"
+  else
+    printf '%s' "$padded"
+  fi
+}
+
+status_color_for() {
+  case "$1" in
+    PASS) printf '%s' "$GREEN" ;;
+    FAIL) printf '%s' "$RED" ;;
+    SKIP) printf '%s' "$YELLOW" ;;
+  esac
+}
+
 print_summary() {
-  local status_symbol
-  if [ "${CI_COLORS:-true}" = "true" ]; then
-    status_symbol="${GREEN}"
-  else
-    status_symbol=""
-  fi
   info "Test Summary:"
-  if [ "${CI_COLORS:-true}" = "true" ]; then
-    printf '%b%s%b | %b%s%b | %b%s%b\n' "$BOLD" "Test" "$RESET" "$BOLD" "Status" "$RESET" "$BOLD" "Duration" "$RESET"
-    printf '%s | %s | %s\n' "$(printf '%0.s-' {1..30})" "$(printf '%0.s-' {1..10})" "$(printf '%0.s-' {1..10})"
-  else
-    printf '%-30s | %-10s | %s\n' "Test" "Status" "Duration"
-    printf '%.0s-' {1..55}
+
+  # Pass 1: collect rows and size each column to its widest cell
+  local -a names=() statuses=() durations=() notes=()
+  local t_name t_status t_duration t_note
+  while IFS='|' read -r t_name t_status t_duration t_note; do
+    t_name="${t_name//[$'\t\r ']/}"
+    [ -z "$t_name" ] && continue
+    names+=("$t_name")
+    statuses+=("${t_status//[$'\t\r ']/}")
+    durations+=("${t_duration//[$'\t\r ']/}")
+    notes+=("${t_note:-}")
+  done <<< "$(printf '%b' "$TEST_ENTRIES")"
+
+  local HEADER_TEST="Test" HEADER_STATUS="Status" HEADER_DURATION="Duration" HEADER_NOTES="Notes"
+  local count=${#names[@]}
+  local w_n=6 w_s=7 w_d=9 w_note=6
+  local i len
+  for ((i = 0; i < count; i++)); do
+    len=${#names[$i]} ;        [ "$len" -gt "$w_n" ] && w_n=$len
+    len=${#statuses[$i]} ;     [ "$len" -gt "$w_s" ] && w_s=$len
+    len=${#durations[$i]} ;    [ "$len" -gt "$w_d" ] && w_d=$len
+    len=${#notes[$i]} ;        [ "$len" -gt "$w_note" ] && w_note=$len
+  done
+  [ "${#HEADER_TEST}" -gt "$w_n" ] && w_n=${#HEADER_TEST}
+  [ "${#HEADER_STATUS}" -gt "$w_s" ] && w_s=${#HEADER_STATUS}
+  [ "${#HEADER_DURATION}" -gt "$w_d" ] && w_d=${#HEADER_DURATION}
+  [ "${#HEADER_NOTES}" -gt "$w_note" ] && w_note=${#HEADER_NOTES}
+
+  print_rule() {
+    local total=$((w_n + w_s + w_d + w_note + 9))
+    printf '%*s\n' "$total" '' | tr ' ' '-'
+  }
+
+  emit_row() {
+    emit_cell "$w_n" "$1";                 printf ' | '
+    emit_cell "$w_s" "$2" "$3";            printf ' | '
+    emit_cell "$w_d" "$4";                 printf ' | '
+    emit_cell "$w_note" "$5" "$6"
     printf '\n'
+  }
+
+  if [ "$count" -eq 0 ]; then
+    info "  (no test results recorded)"
+    return 0
   fi
-  if [ -n "$TEST_ENTRIES" ]; then
-    while IFS='|' read -r t_name t_status t_duration; do
-      t_name="$(echo "$t_name" | xargs)"
-      t_status="$(echo "$t_status" | xargs)"
-      t_duration="$(echo "$t_duration" | xargs)"
-      [ -z "$t_name" ] && continue
-      if [ "$t_status" = "PASS" ]; then
-        if [ "${CI_COLORS:-true}" = "true" ]; then
-          printf '%b%s%b | %b%s%b | %s\n' "$RESET" "$t_name" "$RESET" "$status_symbol" "$t_status" "$RESET" "$t_duration"
-        else
-          printf '%-30s | %b%s%b | %s\n' "$t_name" "$status_symbol" "$t_status" "$RESET" "$t_duration"
-        fi
-      else
-        if [ "${CI_COLORS:-true}" = "true" ]; then
-          printf '%b%s%b | %b%s%b | %s\n' "$RESET" "$t_name" "$RESET" "$RED" "$t_status" "$RESET" "$t_duration"
-        else
-          printf '%-30s | %b%s%b | %s\n' "$t_name" "$RED" "$t_status" "$RESET" "$t_duration"
-        fi
-      fi
-    done <<< "$(printf '%b' "$TEST_ENTRIES")"
-  fi
+
+  print_rule
+  emit_row "$HEADER_TEST" "$HEADER_STATUS" "$BOLD" "$HEADER_DURATION" "$HEADER_NOTES" "$BOLD"
+  print_rule
+  for ((i = 0; i < count; i++)); do
+    emit_row "${names[$i]}" "${statuses[$i]}" "$(status_color_for "${statuses[$i]}")" \
+      "${durations[$i]}" "${notes[$i]}" ""
+  done
+  print_rule
   printf '\n'
-  printf '%bTotal: %s passed, %s failed%b\n' "$BOLD" "$PASS_COUNT" "$FAIL_COUNT" "$RESET"
+  if [ "${CI_COLORS}" = "true" ]; then
+    printf '%bTotal: %s passed, %s failed, %s skipped%b\n' "$BOLD" "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT" "$RESET"
+  else
+    printf 'Total: %s passed, %s failed, %s skipped\n' "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT"
+  fi
   if [ -n "$FAILED_TESTS" ]; then
     printf '\nFailed tests:\n'
     printf '%b' "$FAILED_TESTS"
@@ -213,8 +404,8 @@ test_doctors() {
 test_dind() {
   info "Testing rootless Docker-in-Docker..."
   if [ "${DIND:-0}" != "1" ]; then
-    info "  skipped: requires DIND=1 (use 'make run-dind' or 'make run-tests TYPE=dind DIND=1')"
-    return 0
+    SKIP_NOTE="no rootless Docker daemon started (via make: TYPE=dind starts one automatically)"
+    return 2
   fi
   if ! run_cmd docker info > /dev/null 2>&1; then
     error "rootless dockerd is not reachable (DOCKER_HOST=${DOCKER_HOST:-unset})"
@@ -294,8 +485,8 @@ test_servers() {
   config_file="${config_file:-/home/node/.config/opencode/opencode.json}"
 
   if ! run_cmd test -f "$config_file"; then
-    info "No opencode config found — skipping server tests"
-    return 0
+    SKIP_NOTE="no OpenCode config"
+    return 2
   fi
 
   local default_model
@@ -309,8 +500,8 @@ test_servers() {
   local all_urls
   all_urls="$(run_cmd jq -r '.provider | to_entries[] | "\(.key)|\(.value.options.baseURL)"' "$config_file" 2> /dev/null)"
   if [ -z "$all_urls" ]; then
-    info "No server URLs found in config — skipping server tests"
-    return 0
+    SKIP_NOTE="no provider URLs in config"
+    return 2
   fi
 
   # Determine required URLs (from .model) vs optional
@@ -335,8 +526,13 @@ test_servers() {
     [ -z "$server_url" ] && continue
     total=$((total + 1))
     info "  Testing ${server_url}..."
-    if run_cmd curl -sf --max-time 10 "$server_url" > /dev/null 2>&1; then
-      success "    ${server_url} — reachable"
+    local http_code
+    http_code="$(run_cmd curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$server_url" 2> /dev/null || true)"
+    # Any HTTP response proves DNS/TLS/TCP connectivity: provider root paths
+    # answer with anything from 200 over 401/403 to 404/405 depending on the
+    # service — only a missing response (000) means truly unreachable
+    if [ -n "$http_code" ] && [ "$http_code" != "000" ]; then
+      success "    ${server_url} — reachable (HTTP ${http_code})"
     else
       error "    ${server_url} — unreachable"
       if [ -n "$required_urls" ] && echo "$required_urls" | grep -qF "${server_key}|${server_url}"; then
@@ -353,40 +549,33 @@ test_servers() {
   fi
 }
 
-test_base() {
-  local versions=("opencode" "openspec")
-  for cmd in "${versions[@]}"; do
+# T1: quick local sanity — the binaries the sandbox is all about
+test_versions() {
+  local cmd
+  for cmd in opencode openspec; do
     ver="$(run_cmd "$cmd" --version)"
     echo "running ${cmd} version: ${BOLD}${ver}${RESET}"
   done
+}
 
-  if [ -n "${HOST_NAME:-}" ]; then
-    echo "Testing connection with ${HOST_NAME}"
-    # Custom CAs are installed in the system trust store, so no --cacert needed
-    if [ "$MODE" = "docker" ]; then
-      docker run --rm --entrypoint curl "$IMAGE_NAME" -I \
-        "https://${HOST_NAME}:${HOST_PORT}/"
-    else
-      curl -I \
-        "https://${HOST_NAME}:${HOST_PORT}/"
-    fi
+# T2: optional end-to-end TLS check against a host-provided endpoint.
+# Independent of everything else; failure here does not gate other steps.
+# NOTE: intentionally does NOT touch any Docker socket — the sandbox must be
+# tested through its rootless DinD path only (see test_dind)
+test_host_endpoint() {
+  if [ -z "${HOST_NAME:-}" ]; then
+    SKIP_NOTE="no HOST_NAME endpoint configured"
+    return 2
   fi
 
+  echo "Testing connection with ${HOST_NAME}"
+  # Custom CAs are installed in the system trust store, so no --cacert needed
   if [ "$MODE" = "docker" ]; then
-    if docker run --rm --group-add docker \
-      -v /var/run/docker.sock:/var/run/docker.sock:ro \
-      -v /usr/bin/docker:/usr/bin/docker:ro \
-      --entrypoint /usr/bin/docker "$IMAGE_NAME" ps 2> /dev/null; then
-      success "Docker-in-Docker test passed"
-    else
-      info "Docker-in-Docker test skipped: socket not available or test failed"
-    fi
+    docker run --rm --entrypoint curl "$IMAGE_NAME" -I \
+      "https://${HOST_NAME}:${HOST_PORT}/"
   else
-    if docker ps > /dev/null 2>&1; then
-      success "Docker test passed"
-    else
-      info "Docker test skipped: docker not available"
-    fi
+    curl -I \
+      "https://${HOST_NAME}:${HOST_PORT}/"
   fi
 }
 
@@ -501,20 +690,25 @@ test_config() {
 }
 
 validate_inputs() {
-  # Validate IMAGE_NAME is a local Docker image
-  if ! docker image inspect "$IMAGE_NAME" > /dev/null 2>&1; then
-    error "Error: Image '${IMAGE_NAME}' not found locally"
-    echo "Run 'docker pull ${IMAGE_NAME}' or build the image first."
-    exit 1
+  # Only docker MODE spawns containers itself, so only then must the image
+  # exist locally. In bare mode the script typically runs INSIDE the image
+  # under test — the outer 'docker run' proves its existence, and the sandbox
+  # deliberately has no Docker daemon access (tests never need one; see
+  # test_dind for the self-contained rootless exception)
+  if [ "$MODE" = "docker" ]; then
+    if ! docker image inspect "$IMAGE_NAME" > /dev/null 2>&1; then
+      error "Error: Image '${IMAGE_NAME}' not found locally"
+      echo "Run 'docker pull ${IMAGE_NAME}' or build the image first."
+      exit 1
+    fi
   fi
 
-  # Validate TEST_TYPE
+  # Validate TEST_TYPE: three chains, no aliases
   case "$TEST_TYPE" in
-    linters | agent | browsers | full | updates | all | servers | dind) ;;
+    full | dind | updates) ;;
     *)
       error "Error: Invalid TEST_TYPE '${TEST_TYPE}'"
-      echo "Valid options: linters, agent, browsers, full, updates, servers, all"
-      exit 1
+      usage
       ;;
   esac
 
@@ -529,113 +723,87 @@ validate_inputs() {
   esac
 }
 
+# === Test chains ===
+#
+# TEST_TYPE exposes exactly three chains: full, dind and updates. The tiered
+# suite_* builders below are internal to the `full` chain: every step uses the
+# same step() definitions; dependencies reference state keys set earlier in
+# the SAME run (config/servers/doctors); unmet dependencies are recorded as
+# SKIP instead of failing.
+
+# T1 (internal): static, local-only checks (seconds)
+suite_smoke() {
+  step config "" test_config
+  echo ""
+  step versions "" test_versions
+  echo ""
+  step linters "" test_linters
+}
+
+# T2: local infrastructure self-checks; independent of T1 outcomes
+suite_tools() {
+  step doctors "" test_doctors
+  echo ""
+  step host-endpoint "" test_host_endpoint
+  echo ""
+  step dind "" test_dind
+}
+
+# T3: LLM server reachability — the gate for anything end-to-end
+suite_llm() {
+  step servers "" test_servers
+}
+
+# T4/T5: heavyweight end-to-end agent tests, behind all gates
+suite_e2e() {
+  step agent "config servers doctors" test_agent
+  step playwright "config servers doctors" test_playwright
+}
+
 run_tests() {
   info "Running tests on image: ${BOLD}${IMAGE_NAME}${RESET}"
   echo ""
   info "Mode: ${BOLD}${MODE}${RESET}"
   echo ""
   info "Running under user ID ${ID} and group ID ${SANDBOX_GID}"
-  run_cmd opencode --version
-  run_cmd id
-  TEST_ENTRIES=""
-
-  # Helper to wrap a test with timing and result recording
-  # shellcheck disable=SC2317
-  run_test() {
-    local test_name="$1"
-    shift
-    local start_time
-    start_time="$(date +%s)"
-    if "$@"; then
-      local end_time duration
-      end_time="$(date +%s)"
-      duration=$((end_time - start_time))
-      record_result "$test_name" "PASS" "$duration"
-      TEST_ENTRIES="${TEST_ENTRIES}${test_name}|PASS|${duration}s\n"
-    else
-      local end_time duration
-      end_time="$(date +%s)"
-      duration=$((end_time - start_time))
-      record_result "$test_name" "FAIL" "$duration"
-      TEST_ENTRIES="${TEST_ENTRIES}${test_name}|FAIL|${duration}s\n"
-      error "Test '${test_name}' failed (exit code: $?, duration: ${duration}s)"
-    fi
-  }
-
-  test_config
   echo ""
 
-  # Track whether foundational tests passed — if config or servers fail,
-  # skip everything that depends on them
-  FOUNDATION_OK=true
-  run_test() {
-    local test_name="$1"
-    shift
-    local start_time
-    start_time="$(date +%s)"
-    if "$@"; then
-      local end_time duration
-      end_time="$(date +%s)"
-      duration=$((end_time - start_time))
-      record_result "$test_name" "PASS" "$duration"
-      TEST_ENTRIES="${TEST_ENTRIES}${test_name}|PASS|${duration}s\n"
-    else
-      local end_time duration
-      end_time="$(date +%s)"
-      duration=$((end_time - start_time))
-      record_result "$test_name" "FAIL" "$duration"
-      TEST_ENTRIES="${TEST_ENTRIES}${test_name}|FAIL|${duration}s\n"
-      error "Test '${test_name}' failed (exit code: $?, duration: ${duration}s)"
-      FOUNDATION_OK=false
-    fi
-  }
-
   case "$TEST_TYPE" in
-    browsers)
-      if [ "$FOUNDATION_OK" = true ]; then
-        run_test "base" test_base
-      fi
-      run_test "agent" test_agent
-      run_test "playwright" test_playwright
+    updates)
+      step updates "" test_updates
       ;;
-    linters) run_test "linters" test_linters ;;
-    servers) run_test "servers" test_servers ;;
-    updates) run_test "updates" test_updates ;;
     dind)
-      if [ "$FOUNDATION_OK" = true ]; then
-        run_test "base" test_base
-        echo ""
-      fi
-      run_test "dind" test_dind
+      step dind "" test_dind
       ;;
-    full | all)
-      run_test "servers" test_servers
+    full)
+      suite_smoke
       echo ""
-      if [ "$FOUNDATION_OK" = true ]; then
-        run_test "base" test_base
-        echo ""
-        run_test "linters" test_linters
-        echo ""
-        run_test "updates" test_updates
-        echo ""
-        run_test "doctors" test_doctors
-        echo ""
-        run_test "dind" test_dind
-        echo ""
-        run_test "agent" test_agent
-        run_test "playwright" test_playwright
-      fi
+      suite_tools
+      echo ""
+      suite_llm
+      echo ""
+      suite_e2e
+      echo ""
+      # Advisory: informational checks run last and never gate anything
+      step updates "" test_updates
       ;;
     *)
       usage
       ;;
   esac
+}
 
+finalize() {
   print_summary
-  success "All tests completed for ${IMAGE_NAME}"
+  if [ "$FAIL_COUNT" -gt 0 ]; then
+    error "Test suite finished with ${FAIL_COUNT} failure(s)"
+    exit 1
+  fi
+  success "All tests completed successfully for ${IMAGE_NAME}"
 }
 
 trap 'echo -e "${RED}Test interrupted.${RESET}"; print_summary; exit 1' INT TERM
 
 validate_inputs
 run_tests
+finalize
