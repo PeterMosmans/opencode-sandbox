@@ -4,19 +4,37 @@ An all-in-one, Docker-based sandboxed environment for running
 [OpenCode](https://opencode.ai) with additional development tools and MCP
 servers pre-installed.
 
+The goal of this project is to create a immutable, secure, sandboxed
+environment - where one can run OpenCode within a workspace, without
+touching any non-workspace files on the host.
+
 ## Features
 
 - **OpenCode** — AI-powered coding agent
+- **Prettier, Biome, Ruff, Stylelint** — Linters and formatters
+- **ShellCheck, yamllint** — Shell and YAML linting
+
+Furthermore some MCP servers are pre-installed, and can be run straight from the image:
+
 - **agent-browser** — Browser automation via Playwright
 - **Engram** — Persistent memory MCP server
 - **codebase-memory-mcp** — Codebase knowledge graph
-- **Prettier, Biome, Ruff, Stylelint** — Linters and formatters
-- **ShellCheck, yamllint** — Shell and YAML linting
+
+## Threat model
+
+The LLM and all files within the workspace ("user trust") are
+considered having a different trust level than the host operating
+system and Docker itself ("host trust"). The docker image enforces the
+boundary between the user and host trust.
+
+There is also the option to run Docker-in-Docker, where the container
+has its own private namespace within "user trust", separated from the
+host.
 
 ## Architecture
 
 The OpenCode configuration directory itself, including skills, tools, and
-agents, is mounted read-only.
+agents, is mounted read-only. This will be shared with the container.
 
 ```
 # Enforce the configuration location
@@ -30,11 +48,12 @@ OPENCODE_CONFIG_DIR=/home/node/.config/opencode
 ```
 
 The project directory where opencode-sandbox is started, is mounted as
-read-write project root.
+read-write project root ("user trust")
 
-Project-specific files like prompts and sessions are stored within the project
-directory itself, under the `.memory` directory. This allows you to store and
-resume sessions while still having a sandboxed environment.
+Project-specific files like prompts, sessions, and Docker-in-Docker
+artifacts, are stored within the project directory itself, under the
+`.memory` directory. This allows you to store and resume sessions
+while still having a sandboxed environment.
 
 ```
 $(PROJECT_ROOT)/.memory/codebase-memory-mcp/:/home/node/codebase-memory-mcp/:rw
@@ -46,7 +65,7 @@ $(PROJECT_ROOT)/.memory/opencode/opencode.db-wal:/home/node/.local/share/opencod
 ```
 
 MCP servers like engram and Playwright live within the container. Configuration
-files are mapped read-only, if they exist on the host.
+files are mapped read-only, _if_ they exist on the host.
 
 ```
 ~/.gitconfig:/home/node/.gitconfig:ro
@@ -57,7 +76,7 @@ files are mapped read-only, if they exist on the host.
 
 - Docker
 - make
-- a working OpenCode configuration
+- **a working OpenCode configuration**
 
 ## Quick Start
 
@@ -67,10 +86,26 @@ cp env.example .env
 
 # Build the sandbox image
 make image
+```
+
+On a fresh machine where OpenCode has never been executed, the
+OpenCode configuration directory might not exist yet or is still
+empty. Use the one-time `make run-init` for the initial run: it
+creates the directory if needed and mounts it read-write, so OpenCode
+can bootstrap its own configuration files. Optionally, place a seed
+`opencode.json` there in advance — that is the only file allowed to
+pre-exist. Anything else blocks the bootstrap run (override with
+FORCE=1).
+
+```bash
+# First time only: bootstrap the OpenCode configuration directory
+make run-init
 
 # Run OpenCode in the sandbox
 make run
 ```
+
+Afterwards, use `make run` as usual.
 
 ## Docker Access Modes
 
@@ -85,33 +120,35 @@ make run
 images fully autonomously, but there is no path to the host Docker instance.
 Images and containers persist in `.memory/dind/`.
 
-Notes:
+### `make run-dind`
 
-- Requires unprivileged user namespaces on the host kernel (default on Linux,
-  WSL2 and Docker Desktop). If startup fails with "operation not permitted":
+This is the preferred way if you want to use Docker within the
+OpenCode environment. It requires unprivileged user namespaces on the
+host kernel (default on Linux, WSL2 and Docker Desktop).
+
+If startup fails with "operation not permitted":
   - Debian family / WSL: `sudo sysctl -w kernel.unprivileged_userns_clone=1`
   - Ubuntu 24.04+: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`
-- DIND runs relax the outer seccomp filter (`seccomp=unconfined`) because the
-  engine default blocks nested namespace/mount primitives, and disable
-  `no-new-privileges` (default-on since Engine 25) so the setuid UID-map
-  helpers work. The sandbox boundaries are unaffected: no host Docker socket,
-  namespaced daemon, non-root user. Override with `DIND_SECURITY_FLAGS=`.
-- Without `/dev/fuse`, the daemon falls back to the slower `vfs` storage
-  driver. Override device flags with `DIND_DEVICE_FLAGS=` or pass extras via
-  `DIND_EXTRA_FLAGS=`.
-- `docker compose` is not installed; port publishing uses rootlesskit's
-  builtin port driver.
 
-There is also an **elevated** version, which gives the OpenCode container
-access to the host Docker daemon. **Please note that this is not secure**, and
-would allow (any process within) OpenCode to break out of the sandbox easily.
-Only use it when the safer modes above are insufficient.
+DIND runs relax the outer seccomp filter (`seccomp=unconfined`)
+because the engine default blocks nested namespace/mount primitives,
+and disable `no-new-privileges` (default-on since Engine 25) so the
+setuid UID-map helpers work. The sandbox boundaries are unaffected: no
+host Docker socket, namespaced daemon, non-root user. Override with
+`DIND_SECURITY_FLAGS=`. Without `/dev/fuse`, the daemon falls back to
+the slower `vfs` storage driver. Override device flags with
+`DIND_DEVICE_FLAGS=` or pass extras via `DIND_EXTRA_FLAGS=`.  `docker
+compose` is not installed; port publishing uses rootlesskit's builtin
+port driver.
 
-```
-make run-elevated
-```
+### `make run-elevated`
 
-This will map the following additional files:
+There is also an **elevated** version, `make run-elevated`, which gives
+the OpenCode container access to the host Docker daemon. **Please note
+that this is not secure**, and would allow (any process within)
+OpenCode to break out of the sandbox easily.
+
+This will map the following additional files/sockets:
 
 ```
 /usr/bin/docker:/usr/bin/docker:ro
@@ -154,12 +191,12 @@ make run-tests # Run tests
 ### Run
 
 ```bash
-make run       # Run OpenCode sandbox (no Docker access)
-make run-dind  # Run with a private rootless Docker daemon (recommended)
-make latest    # Run with "latest" tag
-make bash      # Start a bash shell in the sandbox
-make elevated  # Run with host Docker socket access (INSECURE, see above)
-make server    # Run OpenCode server (requires OPENCODE_SERVER_PASSWORD)
+make run           # Run OpenCode sandbox (no Docker access)
+make run-dind      # Run with a private rootless Docker daemon (recommended)
+make run-elevated  # Run with host Docker socket access (INSECURE, see above)
+make latest        # Run with "latest" tag
+make bash          # Start a bash shell in the sandbox
+make server        # Run OpenCode server (requires OPENCODE_SERVER_PASSWORD)
 ```
 
 ### Test
