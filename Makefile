@@ -106,6 +106,10 @@ DIND_EXTRA_FLAGS ?=
 # socket, namespaced daemon, non-root user.
 DIND_SECURITY_FLAGS ?= --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt no-new-privileges=false
 
+# Node.js TLS certificate verification inside the sandbox
+# 1 (default) = enforce; 0 = INSECURE escape hatch (verification disabled)
+STRICT_TLS ?= 1
+
 # Test configuration
 TYPE ?= full
 
@@ -183,6 +187,7 @@ SANDBOX_GID := $(shell getent group $(GROUP) | cut -d: -f3)
 # Base mounts always included in sandbox runs
 SANDBOX_BASE_MOUNTS := -u $$(id -u):$(SANDBOX_GID) \
 	-e OPENCODE_CONFIG_DIR=/home/node/.config/opencode \
+	-e STRICT_TLS=$(STRICT_TLS) \
 	-v $(PROJECT_ROOT)/.memory/codebase-memory-mcp/:/home/node/codebase-memory-mcp/:rw \
 	-v $(PROJECT_ROOT)/.memory/engram/:/home/node/.engram/:rw \
 	-v $(PROJECT_ROOT)/.memory/opencode/prompt-history.jsonl:/home/node/.local/state/opencode/prompt-history.jsonl:rw \
@@ -196,6 +201,7 @@ SANDBOX_BASE_MOUNTS := -u $$(id -u):$(SANDBOX_GID) \
 # Base mounts for ephemeral runs (no .memory/ volume mappings)
 SANDBOX_BASE_MOUNTS_EPHEMERAL := -u $$(id -u):$(SANDBOX_GID) \
 	-e OPENCODE_CONFIG_DIR=/home/node/.config/opencode \
+	-e STRICT_TLS=$(STRICT_TLS) \
 	-v $(PROJECT_ROOT):/$(PROJECT_NAME):rw \
 	-v ~/.config/opencode:/home/node/.config/opencode:ro \
 	-w /$(PROJECT_NAME)
@@ -217,6 +223,7 @@ SANDBOX_MOUNTS_EPHEMERAL := $(SANDBOX_BASE_MOUNTS_EPHEMERAL) $(SANDBOX_OPTIONAL_
 # except that the OpenCode configuration directory is mounted READ-WRITE
 SANDBOX_BASE_MOUNTS_INIT := -u $$(id -u):$(SANDBOX_GID) \
 	-e OPENCODE_CONFIG_DIR=/home/node/.config/opencode \
+	-e STRICT_TLS=$(STRICT_TLS) \
 	-v $(PROJECT_ROOT)/.memory/codebase-memory-mcp/:/home/node/codebase-memory-mcp/:rw \
 	-v $(PROJECT_ROOT)/.memory/engram/:/home/node/.engram/:rw \
 	-v $(PROJECT_ROOT)/.memory/opencode/prompt-history.jsonl:/home/node/.local/state/opencode/prompt-history.jsonl:rw \

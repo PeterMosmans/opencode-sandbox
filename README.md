@@ -184,7 +184,7 @@ cp env.example .env
 | `HOST_LEMONADE`            | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev) |
 | `LEMONADE_HOST`            | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)    |
 | `SERVER_BIND`              | `127.0.0.1`      | Bind address for the published server port           |
-| `STRICT_TLS`               | `0`              | Set to `1` to enforce Node.js TLS verification       |
+| `STRICT_TLS`               | `1`              | `0` = INSECURE: disables Node.js TLS verification    |
 | `TARGET`                   | `example.com`    | Test target hostname for screenshot tests            |
 | `OPENCODE_SERVER_USERNAME` | _(current user)_ | Username for `make server`                           |
 | `OPENCODE_SERVER_PASSWORD` | _(current user)_ | Password for `make server` (weak values are refused) |

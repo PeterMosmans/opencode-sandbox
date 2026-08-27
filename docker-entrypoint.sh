@@ -60,18 +60,35 @@ if [ "${DIND:-0}" = "1" ]; then
 	export DOCKER_HOST="unix://$DIND_SOCKET"
 fi
 
-# OpenCode does not fully support custom CAs yet (upstream limitation).
-# Custom CA certificates ARE installed in the system trust store at build time,
-# so curl, git and Python tools verify certificates regardless.
-#
-# STRICT_TLS=1  enforce Node.js certificate verification (future-proofing)
-# STRICT_TLS=0  disable Node.js verification (default, required by OpenCode)
-if [ "${STRICT_TLS:-0}" = "1" ]; then
+# TLS policy is applied at runtime:
+#   STRICT_TLS=1 (default): Node.js certificate verification stays ENABLED.
+#     The system CA bundle (which includes custom CAs installed at build
+#     time) is offered to Node via NODE_EXTRA_CA_CERTS, so private CAs keep
+#     working without weakening anything. curl, git and Python tools verify
+#     against the same system store regardless.
+#   STRICT_TLS=0: INSECURE - disables Node.js verification entirely, making
+#     connections inside the sandbox interceptable. Escape hatch only.
+STRICT_TLS="${STRICT_TLS:-1}"
+case "$STRICT_TLS" in
+1 | 0) ;;
+*)
+	printf "WARNING: unknown STRICT_TLS value '%s' - falling back to secure mode (1)\n" "$STRICT_TLS" >&2
+	STRICT_TLS=1
+	;;
+esac
+
+# Offer the system CA bundle to Node (inert when verification is disabled).
+# A NODE_EXTRA_CA_CERTS preset from the environment always wins.
+export NODE_EXTRA_CA_CERTS="${NODE_EXTRA_CA_CERTS:-/etc/ssl/certs/ca-certificates.crt}"
+
+if [ "$STRICT_TLS" = "1" ]; then
+	# Fail-safe: never let a leaked NODE_TLS_REJECT_UNAUTHORIZED=0 disable
+	# verification in secure mode
 	unset NODE_TLS_REJECT_UNAUTHORIZED
 else
 	printf '%s\n' \
-		"WARNING: Node.js TLS certificate verification is DISABLED (STRICT_TLS=0)." \
-		"         This is a temporary workaround until OpenCode supports custom CAs." >&2
+		"WARNING (INSECURE): Node.js TLS certificate verification is DISABLED (STRICT_TLS=0)." \
+		"         Connections inside the sandbox can be intercepted. Use STRICT_TLS=1 to enforce verification." >&2
 	export NODE_TLS_REJECT_UNAUTHORIZED=0
 fi
 

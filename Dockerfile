@@ -171,11 +171,12 @@ RUN mkdir -p /opt/google/chrome/ && \
     -x ln -s {} /opt/google/chrome/chrome && \
     ln -s /opt/google/chrome/chrome /usr/local/bin/chrome
 
-# TLS policy is applied at runtime by the entrypoint:
-# STRICT_TLS=0 (default) keeps Node.js verification disabled as a temporary
-# workaround, because OpenCode does not fully support custom CAs yet.
-# Custom CAs are trusted system-wide via update-ca-certificates (step 2).
-ENV STRICT_TLS=0
+# TLS policy is enforced at runtime by the entrypoint:
+# STRICT_TLS=1 (default) keeps Node.js certificate verification ENABLED;
+# custom CAs installed at build time (step 2) are offered to Node via
+# NODE_EXTRA_CA_CERTS. Set STRICT_TLS=0 only as an explicit INSECURE
+# escape hatch.
+ENV STRICT_TLS=1
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --chmod=0755 dockerd-sandboxed.sh /usr/local/bin/dockerd-sandboxed
 
