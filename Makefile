@@ -250,6 +250,36 @@ DOCKER_BUILD_ARGS := \
 	--build-arg GROUP_ID=$(SANDBOX_GID) \
 	--build-arg DOCKER_GROUP=$(DOCKER_GID)
 
+# Isolated docker build context: only the exact build inputs are staged, so
+# `docker build` never walks the workspace. Walking it would fail on entries
+# owned by other UIDs (e.g. .memory/) even when they are .dockerignore'd,
+# because the context sender still opens directories to inspect them.
+# `override` makes the value immune to command-line reassignment: the rm
+# guard below must never be able to target anything but this fixed path.
+override BUILD_CONTEXT := .build-context
+BUILD_CONTEXT_FILES := Dockerfile docker-entrypoint.sh dockerd-sandboxed.sh package.json requirements.txt .dockerignore
+
+# Guarded removal of the staging directory: refuses to run unless the value
+# is a sane, relative, non-trivial path (defends against future edits that
+# might weaken the override guarantee)
+define remove_build_context
+	if [ -n "$(BUILD_CONTEXT)" ] && [ "$(BUILD_CONTEXT)" != "." ] && [ "$(BUILD_CONTEXT)" != "/" ] && [ -d "$(BUILD_CONTEXT)" ]; then \
+		rm -rf -- './$(BUILD_CONTEXT)'; \
+	else \
+		printf '  refusing unsafe rm: BUILD_CONTEXT="%s"\n' '$(BUILD_CONTEXT)'; \
+		exit 1; \
+	fi
+endef
+
+context: # Stage an isolated build context (internal helper for image/custom-image)
+	@$(call remove_build_context)
+	@mkdir -p $(BUILD_CONTEXT)
+	@cp $(BUILD_CONTEXT_FILES) $(BUILD_CONTEXT)/
+	@if [ -e Dockerfile.custom ]; then cp Dockerfile.custom $(BUILD_CONTEXT)/; fi
+	@for pem in *.pem; do \
+		if [ -e "$$pem" ]; then cp -- "$$pem" $(BUILD_CONTEXT)/; fi; \
+	done
+
 # Shared docker image removal pattern
 IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
 
@@ -257,7 +287,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image custom-image run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
+.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context custom-image run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
 
 # === Building ===
 
@@ -300,7 +330,7 @@ endif
 
 build: preflight image # Build a fresh OpenCode sandbox (with preflight check)
 
-image: # Build a fresh OpenCode sandbox
+image: context # Build a fresh OpenCode sandbox (with preflight check)
 	@$(call color_msg,Building image: $(IMAGE_NAME)...)
 	@$(call color_msg,Build arguments:)
 	@printf '  -> ENGRAM_VERSION: %s\n' '$(ENGRAM_VERSION)'
@@ -308,16 +338,26 @@ image: # Build a fresh OpenCode sandbox
 	@printf '  -> USER_ID: %s\n' '$(shell id -u)'
 	@printf '  -> GROUP_ID: %s\n' '$(SANDBOX_GID)'
 	@printf '  -> DOCKER_GROUP: %s\n' '$(DOCKER_GID)'
-	@docker build . -t $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS)
+	@if docker build $(BUILD_CONTEXT) -t $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS); then \
+		$(call remove_build_context); \
+	else \
+		printf '  Build failed - %s kept for inspection\n' '$(BUILD_CONTEXT)'; \
+		exit 1; \
+	fi
 
 tag-version: # Tag the latest image with the opencode-ai version from package.json
 	@docker tag $(IMAGE_NAME):latest $(IMAGE_NAME):$(OPENCODE_VERSION)
 	@$(call green_msg,Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION))
 
-custom-image: # Build image from alternative Dockerfile with different name
+custom-image: context # Build image from alternative Dockerfile with different name
 	@test -f Dockerfile.custom || { $(call error_msg,ERROR: Dockerfile.custom not found); exit 1; }
 	@$(call color_msg,Building image: $(CUSTOM_IMAGE_NAME)...)
-	@docker build -f Dockerfile.custom . -t $(CUSTOM_IMAGE_NAME) -t $(CUSTOM_IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS)
+	@if docker build -f $(BUILD_CONTEXT)/Dockerfile.custom $(BUILD_CONTEXT) -t $(CUSTOM_IMAGE_NAME) -t $(CUSTOM_IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS); then \
+		$(call remove_build_context); \
+	else \
+		printf '  Build failed - %s kept for inspection\n' '$(BUILD_CONTEXT)'; \
+		exit 1; \
+	fi
 
 # === Running ===
 
@@ -448,8 +488,9 @@ test-makefile: validate # Alias for validate target
 
 # === Maintenance ===
 
-clean: remove # Remove sandbox Docker images
-	@docker image prune -f
+clean: remove # Remove sandbox Docker images and leftover build contexts
+	@$(call remove_build_context)
+	-@docker image prune -f
 
 remove: # Remove all sandbox image variants (tags and untagged)
 	@for img in $(IMAGE_PATTERNS); do \

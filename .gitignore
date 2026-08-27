@@ -1,6 +1,7 @@
 # Memory and Playwright work files are local
 .memory/
 .playwright-mcp/
+.build-context/
 # Test files are local
 tests/
 # Certificates shouldn't be part of this repo

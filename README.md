@@ -198,6 +198,13 @@ make image     # Build without preflight checks
 make run-tests # Run tests
 ```
 
+`make image` stages the exact build inputs into an isolated
+`.build-context/` directory first, so the Docker build never walks the
+workspace — workspace entries owned by other users (e.g. `.memory/`)
+cannot break the build. The staging directory is removed after a
+successful build (kept for inspection when the build fails; `make clean`
+also removes it).
+
 ### Run
 
 ```bash
