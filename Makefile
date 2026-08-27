@@ -305,6 +305,7 @@ define check_one_pin
 endef
 
 context: # Stage an isolated build context (internal helper for image/custom-image)
+	@$(call warn_env_crlf)
 	@$(call remove_build_context)
 	@mkdir -p $(BUILD_CONTEXT)
 	@cp $(BUILD_CONTEXT_FILES) $(BUILD_CONTEXT)/
@@ -331,6 +332,7 @@ help: # Display useful commands
 
 preflight: # Check prerequisites before building
 	@$(call bold_msg,Running preflight checks...)
+	@$(call warn_env_crlf)
 	@command -v docker >/dev/null 2>&1 || { $(call error_msg,ERROR: docker is not installed); exit 1; }
 	@docker info >/dev/null 2>&1 || { $(call error_msg,ERROR: docker daemon is not running); exit 1; }
 	@test -f Dockerfile || { $(call error_msg,ERROR: Dockerfile not found in $(CURDIR)); exit 1; }
@@ -339,6 +341,7 @@ preflight: # Check prerequisites before building
 
 preflight-run: # Check prerequisites for run commands
 	@$(call bold_msg,Running preflight checks for run...)
+	@$(call warn_env_crlf)
 	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR)) — this would map your entire home into the sandbox); exit 1; }
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run)); exit 1; }
 	@$(call prepare_memory)
@@ -346,6 +349,7 @@ preflight-run: # Check prerequisites for run commands
 
 preflight-init: # Check prerequisites for the one-time initial bootstrap run
 	@$(call bold_msg,Running preflight checks for initial run...)
+	@$(call warn_env_crlf)
 	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR))); exit 1; }
 	@mkdir -p ~/.config/opencode
 	@$(call prepare_memory)
@@ -542,6 +546,16 @@ update-versions: # Update package.json + requirements.txt with latest versions
 	@echo ""
 	@echo "Fetching latest versions from PyPI and updating requirements.txt..."
 	@bash scripts/update-pip-versions.sh
+
+# Warn when .env contains Windows (CRLF) line endings: make silently keeps
+# the carriage return as part of each value, which corrupts version pins,
+# checksums, URLs and flags. WSL2 round-trips through Windows editors cause
+# this regularly.
+define warn_env_crlf
+	if [ -f .env ] && grep -q $$'\r' .env; then \
+		printf '%bWARNING: .env contains Windows (CRLF) line endings - values carry trailing carriage returns and corrupt build args (versions, checksums).%b Fix with: dos2unix .env, or: sed -i "%s" .env\n' "$(YELLOW)" "$(RESET)" 's/\r$$//g'; \
+	fi
+endef
 
 check-pins: # Verify download checksum pins against upstream manifests (needs network)
 	@work=$$(mktemp -d); trap 'rm -rf $$work' EXIT INT TERM; \

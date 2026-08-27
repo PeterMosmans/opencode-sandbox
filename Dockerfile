@@ -103,15 +103,20 @@ RUN apt-get update && \
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-        amd64) expected="$${BUILDX_SHA256_AMD64}" ;; \
-        arm64) expected="$${BUILDX_SHA256_ARM64}" ;; \
+        amd64) expected="${BUILDX_SHA256_AMD64}" ;; \
+        arm64) expected="${BUILDX_SHA256_ARM64}" ;; \
         *) echo "ERROR: no pinned checksum for architecture '$arch'" >&2; exit 1 ;; \
     esac; \
+    if [ -z "$expected" ]; then \
+        echo "ERROR: build-arg BUILDX_SHA256_${arch} is empty - the Makefile must pass it via --build-arg (stale checkout? re-sync Makefile + Dockerfile together)" >&2; \
+        exit 1; \
+    fi; \
+    expected="$(printf '%s' "$expected" | tr -d '\r\n \t')"; \
     install -D -m 0755 /dev/null /usr/local/lib/docker/cli-plugins/docker-buildx; \
     curl -fsSL \
         "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${arch}" \
         -o /usr/local/lib/docker/cli-plugins/docker-buildx; \
-    echo "$${expected}  /usr/local/lib/docker/cli-plugins/docker-buildx" | sha256sum -c -
+    echo "${expected}  /usr/local/lib/docker/cli-plugins/docker-buildx" | sha256sum -c -
 
 # 5: Ensure required groups exist.
 # Groups are keyed by GID (the docker group must match the HOST's docker GID,
@@ -152,9 +157,14 @@ RUN npm install -g --prefer-dedupe \
 
 # engram MCP (version- and checksum-pinned; canonical upstream release artifact)
 RUN set -eux; \
+    if [ -z "${ENGRAM_SHA256}" ]; then \
+        echo "ERROR: build-arg ENGRAM_SHA256 is empty - the Makefile must pass it via --build-arg (stale checkout? re-sync Makefile + Dockerfile together)" >&2; \
+        exit 1; \
+    fi; \
+    engram_sha="$(printf '%s' "${ENGRAM_SHA256}" | tr -d '\r\n \t')"; \
     curl -fsSL -o /tmp/engram.tar.gz \
         "https://github.com/Gentleman-Programming/engram/releases/download/v${ENGRAM_VERSION}/engram_${ENGRAM_VERSION}_linux_amd64.tar.gz"; \
-    echo "${ENGRAM_SHA256}  /tmp/engram.tar.gz" | sha256sum -c -; \
+    echo "${engram_sha}  /tmp/engram.tar.gz" | sha256sum -c -; \
     tar -xzf /tmp/engram.tar.gz -C /tmp; \
     mv /tmp/engram /usr/local/bin/; \
     rm /tmp/engram.tar.gz
