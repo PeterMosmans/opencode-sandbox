@@ -68,6 +68,11 @@ OPENCODE_SERVER_USERNAME ?= $(shell id -u --name)
 OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
 ENGRAM_VERSION ?= 1.20.0
 BUILDX_VERSION ?= 0.36.1
+# SHA256 pins for build-time downloads (refresh together with the versions):
+#   curl -fsSL <artifact-url> | sha256sum
+ENGRAM_SHA256 ?= 7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca
+BUILDX_SHA256_AMD64 ?= 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+BUILDX_SHA256_ARM64 ?= 5d0cafd9d16afe1a0f0d9529885344ace2cc99efdd531b6c783c5455a6001569
 TARGET ?= example.com
 
 # Image tag defaults to "latest" for day-to-day builds. Override to tag
@@ -245,7 +250,10 @@ HOST_CONFIG_EXTRA := $(filter-out $(HOST_CONFIG_SEED),$(wildcard $(HOME)/.config
 # Shared docker build arguments (non-npm packages and runtime config only)
 DOCKER_BUILD_ARGS := \
 	--build-arg ENGRAM_VERSION=$(ENGRAM_VERSION) \
+	--build-arg ENGRAM_SHA256=$(ENGRAM_SHA256) \
 	--build-arg BUILDX_VERSION=$(BUILDX_VERSION) \
+	--build-arg BUILDX_SHA256_AMD64=$(BUILDX_SHA256_AMD64) \
+	--build-arg BUILDX_SHA256_ARM64=$(BUILDX_SHA256_ARM64) \
 	--build-arg USER_ID=$$(id -u) \
 	--build-arg GROUP_ID=$(SANDBOX_GID) \
 	--build-arg DOCKER_GROUP=$(DOCKER_GID)
@@ -271,6 +279,23 @@ define remove_build_context
 	fi
 endef
 
+# Compare one pinned checksum against an upstream checksums.txt manifest.
+# $1 = label, $2 = pinned sha256, $3 = manifest file, $4 = artifact filename.
+# Handles goreleaser/sha256sum quirks: optional './' and binary-mode '*'.
+define check_one_pin
+	pin_line=$$(awk -v f="$4" '{ gsub(/^\*/,"",$$2); gsub(/^\.\//,"",$$2); if ($$2 == f) print $$1 }' "$3"); \
+	if [ -z "$$pin_line" ]; then \
+		$(call error_msg,  $1: artifact not found in manifest: $4); \
+		exit 1; \
+	fi; \
+	if [ "$$pin_line" = "$2" ]; then \
+		$(call green_msg,  $1: pin matches upstream); \
+	else \
+		printf '%b  $1: MISMATCH - pin=[$2] upstream=[%s]%b\n' "$(RED)" "$$pin_line" "$(RESET)"; \
+		exit 1; \
+	fi
+endef
+
 context: # Stage an isolated build context (internal helper for image/custom-image)
 	@$(call remove_build_context)
 	@mkdir -p $(BUILD_CONTEXT)
@@ -287,7 +312,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context custom-image run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
+.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context custom-image check-pins run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
 
 # === Building ===
 
@@ -509,6 +534,15 @@ update-versions: # Update package.json + requirements.txt with latest versions
 	@echo ""
 	@echo "Fetching latest versions from PyPI and updating requirements.txt..."
 	@bash scripts/update-pip-versions.sh
+
+check-pins: # Verify download checksum pins against upstream manifests (needs network)
+	@work=$$(mktemp -d); trap 'rm -rf $$work' EXIT INT TERM; \
+	curl -fsSL "https://github.com/Gentleman-Programming/engram/releases/download/v$(ENGRAM_VERSION)/checksums.txt" -o $$work/engram.txt || exit 1; \
+	curl -fsSL "https://github.com/docker/buildx/releases/download/v$(BUILDX_VERSION)/checksums.txt" -o $$work/buildx.txt || exit 1; \
+	$(call check_one_pin,engram $(ENGRAM_VERSION) linux_amd64,$(ENGRAM_SHA256),$$work/engram.txt,engram_$(ENGRAM_VERSION)_linux_amd64.tar.gz); \
+	$(call check_one_pin,buildx $(BUILDX_VERSION) amd64,$(BUILDX_SHA256_AMD64),$$work/buildx.txt,buildx-v$(BUILDX_VERSION).linux-amd64); \
+	$(call check_one_pin,buildx $(BUILDX_VERSION) arm64,$(BUILDX_SHA256_ARM64),$$work/buildx.txt,buildx-v$(BUILDX_VERSION).linux-arm64); \
+	$(call status_msg,All download pins match upstream manifests)
 
 check-versions: # Compare package.json + requirements.txt versions against registries
 	@UP_TO_DATE=0 && \

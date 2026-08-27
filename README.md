@@ -175,19 +175,22 @@ cp env.example .env
 
 ### Environment Variables
 
-| Variable                   | Default          | Description                                          |
-| -------------------------- | ---------------- | ---------------------------------------------------- |
-| `ALLOW_WEAK_SERVER_CREDENTIALS` | `0`         | Set to `1` to allow weak server credentials          |
-| `ENGRAM_VERSION`           | `1.20.0`         | Version of the Engram binary to download             |
-| `BUILDX_VERSION`           | `0.36.1`         | buildx plugin version (BuildKit inside rootless DinD)|
-| `GROUP`                    | default group    | Group name to be used in Docker container            |
-| `HOST_LEMONADE`            | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev) |
-| `LEMONADE_HOST`            | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)    |
-| `SERVER_BIND`              | `127.0.0.1`      | Bind address for the published server port           |
-| `STRICT_TLS`               | `1`              | `0` = INSECURE: disables Node.js TLS verification    |
-| `TARGET`                   | `example.com`    | Test target hostname for screenshot tests            |
-| `OPENCODE_SERVER_USERNAME` | _(current user)_ | Username for `make server`                           |
-| `OPENCODE_SERVER_PASSWORD` | _(current user)_ | Password for `make server` (weak values are refused) |
+| Variable                        | Default          | Description                                            |
+| ------------------------------- | ---------------- | ------------------------------------------------------ |
+| `ALLOW_WEAK_SERVER_CREDENTIALS` | `0`              | Set to `1` to allow weak server credentials            |
+| `ENGRAM_VERSION`                | `1.20.0`         | Version of the Engram binary to download               |
+| `ENGRAM_SHA256`                 | pinned           | SHA256 of the Engram tarball (build fails on mismatch) |
+| `BUILDX_VERSION`                | `0.36.1`         | buildx plugin version (BuildKit inside rootless DinD)  |
+| `BUILDX_SHA256_AMD64`           | pinned           | SHA256 of the buildx binary (amd64)                    |
+| `BUILDX_SHA256_ARM64`           | pinned           | SHA256 of the buildx binary (arm64)                    |
+| `GROUP`                         | default group    | Group name to be used in Docker container              |
+| `HOST_LEMONADE`                 | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev)   |
+| `LEMONADE_HOST`                 | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)      |
+| `SERVER_BIND`                   | `127.0.0.1`      | Bind address for the published server port             |
+| `STRICT_TLS`                    | `1`              | `0` = INSECURE: disables Node.js TLS verification      |
+| `TARGET`                        | `example.com`    | Test target hostname for screenshot tests              |
+| `OPENCODE_SERVER_USERNAME`      | _(current user)_ | Username for `make server`                             |
+| `OPENCODE_SERVER_PASSWORD`      | _(current user)_ | Password for `make server` (weak values are refused)   |
 
 ## Usage
 

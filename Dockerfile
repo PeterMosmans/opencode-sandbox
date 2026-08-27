@@ -11,8 +11,13 @@ ARG GROUP_ID=1001
 ARG DOCKER_GROUP=111
 # Browser versions
 ARG ENGRAM_VERSION
+# SHA256 of the engram release tarball (fail-closed when empty)
+ARG ENGRAM_SHA256
 # Docker buildx CLI plugin (pinned; latest stable from github.com/docker/buildx/releases)
 ARG BUILDX_VERSION
+# SHA256 per architecture of the buildx plugin binary (fail-closed when empty)
+ARG BUILDX_SHA256_AMD64
+ARG BUILDX_SHA256_ARM64
 
 # Set some sane OpenCode and Openspec defaults
 ENV DO_NOT_TRACK=1
@@ -90,17 +95,23 @@ RUN apt-get update && \
     zsh && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# 4b: Install the buildx CLI plugin (pinned).
+# 4b: Install the buildx CLI plugin (version- and checksum-pinned).
 # Without it, 'docker build' inside the rootless DinD daemon falls back to the
 # deprecated legacy builder (see https://docs.docker.com/go/buildx/). Once the
 # plugin exists, Engine >= 23 auto-selects BuildKit through the default
 # docker-driver: no further configuration is needed.
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) expected="$${BUILDX_SHA256_AMD64}" ;; \
+        arm64) expected="$${BUILDX_SHA256_ARM64}" ;; \
+        *) echo "ERROR: no pinned checksum for architecture '$arch'" >&2; exit 1 ;; \
+    esac; \
     install -D -m 0755 /dev/null /usr/local/lib/docker/cli-plugins/docker-buildx; \
     curl -fsSL \
         "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${arch}" \
-        -o /usr/local/lib/docker/cli-plugins/docker-buildx
+        -o /usr/local/lib/docker/cli-plugins/docker-buildx; \
+    echo "$${expected}  /usr/local/lib/docker/cli-plugins/docker-buildx" | sha256sum -c -
 
 # 5: Ensure required groups exist.
 # Groups are keyed by GID (the docker group must match the HOST's docker GID,
@@ -139,11 +150,14 @@ RUN npm install -g --prefer-dedupe \
     $(node -e "const deps = require('/tmp/package.json').dependencies; console.log(Object.entries(deps).map(([k,v]) => v === 'latest' ? k : k + '@' + v).join(' '))") \
     && rm -rf /root/.npm /tmp/*
 
-# engram MCP
-RUN curl -LO https://github.com/Gentleman-Programming/engram/releases/download/v${ENGRAM_VERSION}/engram_${ENGRAM_VERSION}_linux_amd64.tar.gz && \
-tar -xzf engram_${ENGRAM_VERSION}_linux_amd64.tar.gz && \
-mv engram /usr/local/bin/ && \
-rm /engram_${ENGRAM_VERSION}_linux_amd64.tar.gz
+# engram MCP (version- and checksum-pinned; canonical upstream release artifact)
+RUN set -eux; \
+    curl -fsSL -o /tmp/engram.tar.gz \
+        "https://github.com/Gentleman-Programming/engram/releases/download/v${ENGRAM_VERSION}/engram_${ENGRAM_VERSION}_linux_amd64.tar.gz"; \
+    echo "${ENGRAM_SHA256}  /tmp/engram.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/engram.tar.gz -C /tmp; \
+    mv /tmp/engram /usr/local/bin/; \
+    rm /tmp/engram.tar.gz
 
 # 7: Create python venv + install Python deps from requirements.txt
 COPY requirements.txt /tmp/requirements.txt
