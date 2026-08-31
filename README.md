@@ -34,8 +34,8 @@ Two trust levels are separated:
   outside the workspace (SSH keys, browser profiles, other projects).
 
 The image enforces the boundary in the _user → host_ direction: normal runs get
-no access to the host Docker daemon, no mounts outside the workspace (plus a
-strictly read-only set of host configuration), and run as a non-root user.
+no access to the host Docker daemon, no mounts outside the workspace, a
+read-only configuration, and run as a non-root user.
 
 ### What user trust can see and change
 
@@ -48,38 +48,24 @@ sandbox, by design — including secrets that live there:
   it cannot be modified, but it **is readable**. Granting the agent LLM access
   means granting it the key.
 
+Furthermore the opencode configuration directory is mounted read-only, as well
+as a `~/.gitconfig` file (if present).
+
 ### Persistent state (survives sessions)
 
-Project-local state under `.memory/` persists across runs and shapes future
+Workshop state under `.memory/` persists across runs and influences (future)
 sessions: Engram memories (`engram.db`), the codebase knowledge graph, the
 OpenCode session database and prompt history, and DinD images/containers
-(`.memory/dind/`). Treat these as **trusted-but-influenceable**: content an
-agent (or a malicious prompt it processed) writes into memory today is trusted
-input for every future session. Deleting `.memory/` resets the agent environment
-entirely.
+(`.memory/dind/`). Content an agent (or a malicious prompt it processed) writes
+into memory today is trusted input for every future session. Deleting `.memory/`
+resets the agent environment entirely.
 
 ### The run-init trust window
 
-`make run-init` is the one target that mounts `~/.config/opencode` (skills,
-agents, rules) **read-write**. Anything written there becomes trusted, read-only
+`make run-init` mounts the directory `~/.config/opencode` (skills, agents,
+rules) **read-write**. Anything written there becomes trusted, read-only
 configuration for _all future sessions_. Run it yourself first, review what was
 created, then hand autonomy to the agent.
-
-### Platform notes
-
-| Platform               | Notes                                                                                                                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Linux                  | Full experience; unprivileged user namespaces required for DinD                                                                                                                |
-| WSL2                   | Same as Linux; may need `kernel.unprivileged_userns_clone=1` (Debian) or `kernel.apparmor_restrict_unprivileged_userns=0` (Ubuntu 24.04+)                                      |
-| macOS / Docker Desktop | No `/dev/fuse` (DinD falls back to the slower `vfs` storage driver) and no `/dev/net/tun` (DinD containers share the sandbox's network namespace instead of getting their own) |
-
-### Supply chain
-
-- Build-time downloads (the Engram binary and the buildx plugin) are version-
-  **and** checksum-pinned: the build fails closed on a mismatched or missing
-  checksum.
-- The base image (`node:24-trixie-slim`) is pinned by digest — refresh it
-  deliberately with the registry query documented in the Dockerfile.
 
 ## Architecture
 
@@ -115,7 +101,7 @@ $(PROJECT_ROOT)/.memory/opencode/opencode.db-wal:/home/node/.local/share/opencod
 ```
 
 MCP servers like engram and Playwright live within the container. Configuration
-files are mapped read-only, _if_ they exist on the host.
+files are mapped read-only, if they exist on the host.
 
 ```
 ~/.gitconfig:/home/node/.gitconfig:ro
@@ -126,7 +112,7 @@ files are mapped read-only, _if_ they exist on the host.
 
 - Docker
 - make
-- **a working OpenCode configuration**
+- optional: a working OpenCode configuration
 
 ## Quick Start
 
@@ -223,22 +209,22 @@ cp env.example .env
 
 ### Environment Variables
 
-| Variable                        | Default          | Description                                            |
-| ------------------------------- | ---------------- | ------------------------------------------------------ |
-| `ALLOW_WEAK_SERVER_CREDENTIALS` | `0`              | Set to `1` to allow weak server credentials            |
-| `ENGRAM_VERSION`                | `1.20.0`         | Version of the Engram binary to download               |
-| `ENGRAM_SHA256`                 | pinned           | SHA256 of the Engram tarball (build fails on mismatch) |
-| `BUILDX_VERSION`                | `0.36.1`         | buildx plugin version (BuildKit inside rootless DinD)  |
-| `BUILDX_SHA256_AMD64`           | pinned           | SHA256 of the buildx binary (amd64)                    |
-| `BUILDX_SHA256_ARM64`           | pinned           | SHA256 of the buildx binary (arm64)                    |
-| `GROUP`                         | default group    | Group name to be used in Docker container              |
-| `HOST_LEMONADE`                 | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev)   |
-| `LEMONADE_HOST`                 | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)      |
-| `SERVER_BIND`                   | `127.0.0.1`      | Bind address for the published server port             |
-| `STRICT_TLS`                    | `1`              | `0` = INSECURE: disables Node.js TLS verification      |
-| `TARGET`                        | `example.com`    | Test target hostname for screenshot tests              |
-| `OPENCODE_SERVER_USERNAME`      | _(current user)_ | Username for `make server`                             |
-| `OPENCODE_SERVER_PASSWORD`      | _(current user)_ | Password for `make server` (weak values are refused)   |
+| Variable                        | Default          | Description                                                                                                                                                                                                                                        |
+| ------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOW_WEAK_SERVER_CREDENTIALS` | `0`              | Set to `1` to allow weak server credentials                                                                                                                                                                                                        |
+| `ENGRAM_VERSION`                | `1.20.0`         | Version of the Engram binary to download                                                                                                                                                                                                           |
+| `ENGRAM_SHA256`                 | pinned           | SHA256 of the Engram tarball (build fails on mismatch)                                                                                                                                                                                             |
+| `BUILDX_VERSION`                | `0.36.1`         | buildx plugin version (BuildKit inside rootless DinD)                                                                                                                                                                                              |
+| `BUILDX_SHA256_AMD64`           | pinned           | SHA256 of the buildx binary (amd64)                                                                                                                                                                                                                |
+| `BUILDX_SHA256_ARM64`           | pinned           | SHA256 of the buildx binary (arm64)                                                                                                                                                                                                                |
+| `GROUP`                         | default group    | Group for container files; baked in as GROUP_ID at build time. Images are tagged per group (`latest-g<gid>`), so runs always use the image matching the requested group. Rootless DinD requires the runtime gid to match the image's primary group |
+| `HOST_LEMONADE`                 | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev)                                                                                                                                                                                               |
+| `LEMONADE_HOST`                 | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)                                                                                                                                                                                                  |
+| `SERVER_BIND`                   | `127.0.0.1`      | Bind address for the published server port                                                                                                                                                                                                         |
+| `STRICT_TLS`                    | `1`              | `0` = INSECURE: disables Node.js TLS verification                                                                                                                                                                                                  |
+| `TARGET`                        | `example.com`    | Test target hostname for screenshot tests                                                                                                                                                                                                          |
+| `OPENCODE_SERVER_USERNAME`      | _(current user)_ | Username for `make server`                                                                                                                                                                                                                         |
+| `OPENCODE_SERVER_PASSWORD`      | _(current user)_ | Password for `make server` (weak values are refused)                                                                                                                                                                                               |
 
 ## Usage
 
@@ -282,6 +268,22 @@ their dependencies passing in the same run. Skipped steps appear in the summary
 with a reason, and the exit code reflects real failures only. The `dind` chain
 never touches the host daemon; via make it starts its own private rootless
 daemon for you.
+
+### Platform notes
+
+| Platform               | Notes                                                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Linux                  | Full experience; unprivileged user namespaces required for DinD                                                                                                                |
+| WSL2                   | Same as Linux; may need `kernel.unprivileged_userns_clone=1` (Debian) or `kernel.apparmor_restrict_unprivileged_userns=0` (Ubuntu 24.04+)                                      |
+| macOS / Docker Desktop | No `/dev/fuse` (DinD falls back to the slower `vfs` storage driver) and no `/dev/net/tun` (DinD containers share the sandbox's network namespace instead of getting their own) |
+
+### Supply chain
+
+- Build-time downloads (the Engram binary and the buildx plugin) are version-
+  **and** checksum-pinned: the build fails closed on a mismatched or missing
+  checksum.
+- The base image (`node:24-trixie-slim`) is pinned by digest — refresh it
+  deliberately with the registry query documented in the Dockerfile.
 
 ## License
 

@@ -172,12 +172,18 @@ printf '  -> Image tag: %s\033[1m%s\033[0m\n' "$(IMAGE_NAME):" "$(1)"
 endef
 
 # Create the .memory/ directory structure and placeholder session/prompt
-# files. Fails loudly when entries exist that are NOT owned by the invoking
-# user: rootless dockerd chmods .memory/dind and SQLite needs write access,
-# which breaks cryptically later when ownership belongs to some other UID
+# files. Fails loudly (no suppressed stderr) when directories or files cannot
+# be created, or when entries exist that are NOT owned by the invoking user:
+# rootless dockerd chmods .memory/dind and SQLite needs write access, which
+# breaks cryptically later when ownership belongs to some other UID
 # (e.g. leftovers from another account or CI run)
 define prepare_memory
-mkdir -p .memory/{codebase-memory-mcp,dind,engram,opencode} 2>/dev/null; \
+for dir in .memory .memory/codebase-memory-mcp .memory/dind .memory/engram .memory/opencode; do \
+	if ! mkdir -p "$$dir"; then \
+		printf '%bERROR:%b Cannot create %s (check write access on %s)\n' '$(RED)' '$(RESET)' "$$dir" '$(CURDIR)'; \
+		exit 1; \
+	fi; \
+done; \
 unowned=""; \
 for entry in .memory .memory/codebase-memory-mcp .memory/dind .memory/engram .memory/opencode \
 	.memory/opencode/opencode.db .memory/opencode/opencode.db-shm .memory/opencode/opencode.db-wal .memory/opencode/prompt-history.jsonl; do \
