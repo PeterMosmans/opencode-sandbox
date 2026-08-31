@@ -5,7 +5,7 @@ An all-in-one, Docker-based sandboxed environment for running
 servers pre-installed.
 
 The goal of this project is to create a secure, sandboxed environment - where
-one can run OpenCode within a workspace, without touching any non-workspace
+one can run OpenCode within a workspace, without it touching any non-workspace
 files on the host.
 
 The security is as strong as the security of the virtualization layer (Docker)
@@ -123,6 +123,9 @@ cp env.example .env
 # Build the sandbox image
 make image
 ```
+
+Note that you can add extra (Python) packages inside the `extra/` directory -
+those will be installed automatically during the build.
 
 On a fresh machine where OpenCode has never been executed, the OpenCode
 configuration directory might not exist yet or is still empty. Use the one-time

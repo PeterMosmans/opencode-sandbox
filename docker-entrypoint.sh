@@ -23,6 +23,29 @@ start_dind() {
 		exit 1
 	fi
 
+	# Rootlesskit's newuidmap refuses to map a process whose gid differs from
+	# the primary group of the user in /etc/passwd. The image bakes GROUP_ID
+	# (host primary group at BUILD time) into /etc/passwd; if the host group
+	# changed since, the runtime gid no longer matches and startup would fail
+	# with a cryptic newuidmap error. Fail early with the remedy instead.
+	local pw_gid
+	# || true: getent exits non-zero for unknown uids, which set -e + pipefail
+	# would otherwise turn into a silent failure before the check below runs
+	pw_gid="$(getent passwd "$(id -u)" | cut -d: -f4 || true)"
+	if [ -z "$pw_gid" ]; then
+		echo "ERROR: runtime uid $(id -u) not found in /etc/passwd - rootless Docker-in-Docker cannot start" >&2
+		echo "       Rebuild the image with: make build" >&2
+		exit 1
+	fi
+	if [ "$pw_gid" != "$(id -g)" ]; then
+		printf 'ERROR: image primary group for uid %s is %s, but the container runs with gid %s\n' \
+			"$(id -u)" "$pw_gid" "$(id -g)" >&2
+		echo "       Rootless Docker-in-Docker requires both to match." >&2
+		echo "       The image was built with a different GROUP_ID (did your host primary group change?)." >&2
+		echo "       Rebuild the image so it matches your current group: make build" >&2
+		exit 1
+	fi
+
 	mkdir -p "$runtime_dir" "$data_root"
 	# Rootless-in-container: /proc/sys is mounted read-only, so dockerd cannot
 	# disable IPv6 router advertisement on interfaces; instruct it to tolerate
