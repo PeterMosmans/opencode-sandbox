@@ -19,6 +19,7 @@ TEST_ENTRIES=""
 #   TEST_TYPE  : Chain to run (see CHAINS below; default: full)
 #   MODE       : bare (run commands directly) or docker (wrap in docker run, default)
 #   TARGET     : Host to screenshot (default: example.com)
+#   SKIP_E2E   : Set to 1 to skip end-to-end agent screenshot tests (default: 0)
 #
 # There are three test chains:
 #
@@ -75,6 +76,7 @@ usage() {
   echo "                       (make sets up the private daemon automatically)"
   echo "               updates = npm/pip package update check only"
   echo "  MODE       : bare (run directly) or docker (wrap in docker run)"
+  echo "  SKIP_E2E   : set to 1 to skip T4/T5 agent screenshot tests"
   exit 1
 }
 
@@ -399,6 +401,8 @@ test_doctors() {
   run_cmd agent-browser doctor
   run_cmd engram doctor
   run_cmd bd doctor
+  info "Testing codebase-memory-mcp connectivity"
+  run_cmd codebase-memory-mcp cli list_projects
 }
 
 test_dind() {
@@ -552,7 +556,7 @@ test_servers() {
 # T1: quick local sanity — the binaries the sandbox is all about
 test_versions() {
   local cmd
-  for cmd in opencode openspec; do
+  for cmd in opencode openspec codebase-memory-mcp; do
     ver="$(run_cmd "$cmd" --version)"
     echo "running ${cmd} version: ${BOLD}${ver}${RESET}"
   done
@@ -782,7 +786,11 @@ run_tests() {
       echo ""
       suite_llm
       echo ""
-      suite_e2e
+      if [ "${SKIP_E2E:-0}" != "1" ]; then
+        suite_e2e
+      else
+        info "Skipping end-to-end agent tests (SKIP_E2E=1)"
+      fi
       echo ""
       # Advisory: informational checks run last and never gate anything
       step updates "" test_updates
