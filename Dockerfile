@@ -190,6 +190,25 @@ RUN /opt/venv/bin/playwright install --with-deps \
     chromium-headless-shell \
     && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/*
 
+# 8b: Install optional local Python modules from extra/ (if any): every
+# subdirectory containing packaging metadata (pyproject.toml, setup.py or
+# setup.cfg) is pip installed into the venv. The COPY is a silent no-op
+# when the build context contains no extra/ directory.
+COPY extra* /tmp/extra/
+RUN set -eux; \
+    count=0; \
+    for d in /tmp/extra/*/; do \
+        [ -d "$d" ] || continue; \
+        if [ -f "${d}pyproject.toml" ] || [ -f "${d}setup.py" ] || [ -f "${d}setup.cfg" ]; then \
+            pip install --no-cache-dir "$d"; \
+            count=$((count + 1)); \
+        else \
+            echo "Skipping $d (no packaging metadata found)"; \
+        fi; \
+    done; \
+    rm -rf /tmp/extra; \
+    echo "Installed ${count} optional extra module(s)"
+
 # 9: Set up some default locations for OpenCode
 RUN mkdir -p /home/node/.local/share/opencode \
               /home/node/.local/state/opencode \

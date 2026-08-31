@@ -4,6 +4,8 @@
 .build-context/
 # Test files are local
 tests/
+# Extras are not part of this repo
+extra/
 # Certificates shouldn't be part of this repo
 *.pem
 # Environment files (use .env.example as template)

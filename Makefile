@@ -197,7 +197,10 @@ if [ -n "$$unowned" ]; then \
 	echo "       sudo chown -R $$(id -u):$$(id -g) .memory"; \
 	exit 1; \
 fi; \
-touch .memory/opencode/{opencode.db{,-shm,-wal},prompt-history.jsonl}
+if ! touch .memory/opencode/opencode.db .memory/opencode/opencode.db-shm .memory/opencode/opencode.db-wal .memory/opencode/prompt-history.jsonl; then \
+	$(call error_msg,ERROR: Cannot create .memory/opencode session files (check write access on $(CURDIR))); \
+	exit 1; \
+fi
 endef
 
 # === Derived Variables ===
@@ -319,6 +322,9 @@ context: # Stage an isolated build context (internal helper for image/custom-ima
 	@for pem in *.pem; do \
 		if [ -e "$$pem" ]; then cp -- "$$pem" $(BUILD_CONTEXT)/; fi; \
 	done
+	@if [ -d extra ]; then \
+		cp -R extra $(BUILD_CONTEXT)/extra; \
+	fi
 
 # Shared docker image removal pattern
 IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
@@ -343,6 +349,7 @@ preflight: # Check prerequisites before building
 	@docker info >/dev/null 2>&1 || { $(call error_msg,ERROR: docker daemon is not running); exit 1; }
 	@test -f Dockerfile || { $(call error_msg,ERROR: Dockerfile not found in $(CURDIR)); exit 1; }
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run)); exit 1; }
+	@test -n "$(SANDBOX_GID)" || { $(call error_msg,ERROR: GROUP '$(GROUP)' does not resolve to a group ID (check .env and host groups)); exit 1; }
 	@$(call status_msg,All preflight checks passed)
 
 preflight-run: # Check prerequisites for run commands
@@ -350,6 +357,7 @@ preflight-run: # Check prerequisites for run commands
 	@$(call warn_env_crlf)
 	@test "$(CURDIR)" != "$(HOME)" || { $(call error_msg,ERROR: Cannot run from home directory ($(CURDIR)) — this would map your entire home into the sandbox); exit 1; }
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run)); exit 1; }
+	@test -n "$(SANDBOX_GID)" || { $(call error_msg,ERROR: GROUP '$(GROUP)' does not resolve to a group ID (check .env and host groups)); exit 1; }
 	@$(call prepare_memory)
 	@$(call status_msg,All run preflight checks passed)
 
@@ -499,10 +507,12 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 	@$(call color_msg,Running tests inside Docker container...)
 	@$(call color_msg,  Image: $(IMAGE_NAME))
 	@$(call color_msg,  Type:  $(TYPE))
+	@$(call color_msg,  Skip e2e: $(or $(SKIP_E2E),no))
 	@mkdir -p tests/ 2>/dev/null
-	@docker run $(INTERACTIVE_FLAGS) \
+	@export SKIP_E2E && docker run $(INTERACTIVE_FLAGS) \
 		$(SANDBOX_MOUNTS_EPHEMERAL) \
 		$(DIND_TEST_FLAGS) \
+		-e SKIP_E2E=$${SKIP_E2E:-} \
 	    -v $(CURDIR)/tests:/tests:rw \
 		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
 		-u $$(id -u):$(SANDBOX_GID) \
@@ -541,7 +551,8 @@ remove: # Remove all sandbox image variants (tags and untagged)
 	done
 
 package: # Create a zip archive with all files needed to build and test the image, named with version tag
-	@zip -q "sandbox-$(IMAGE_TAG).zip" $(PACKED_FILES)
+	@zip -qr "sandbox-$(IMAGE_TAG).zip" $(PACKED_FILES) $(if $(wildcard extra),extra,) \
+		-x '*__pycache__*' '*.pytest_cache*' '*.ruff_cache*' '*.egg-info*'
 	@$(call status_msg,Created sandbox-$(IMAGE_TAG).zip)
 
 # === Version Management ===

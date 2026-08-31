@@ -8,3 +8,13 @@
 !dockerd-sandboxed.sh
 # .. and optional certificate files
 !*.pem
+# ... and optional local Python modules (installed by the Dockerfile)
+!extra
+!extra/**
+# Local build artifacts inside the extra modules are never installed
+extra/**/__pycache__
+extra/**/.pytest_cache
+extra/**/.ruff_cache
+extra/**/.venv
+extra/**/*.egg-info
+extra/**/dist
