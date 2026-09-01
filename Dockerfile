@@ -47,6 +47,7 @@ ENV XDG_CACHE_HOME=/home/node/.cache
 # Ensure that both Playwright and agent-browser share the same browsers
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.agent-browser/browsers
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/google/chrome/chrome
+ENV PLAYWRIGHT_MCP_USER_DATA_DIR=./memory/playwright-mcp/
 
 # Add Python package location to the path
 ENV PATH="/opt/venv/bin:$PATH"
