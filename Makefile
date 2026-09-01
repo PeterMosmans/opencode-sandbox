@@ -173,10 +173,11 @@ endef
 
 # Create the .memory/ directory structure and placeholder session/prompt
 # files. Fails loudly (no suppressed stderr) when directories or files cannot
-# be created, or when entries exist that are NOT owned by the invoking user:
-# rootless dockerd chmods .memory/dind and SQLite needs write access, which
-# breaks cryptically later when ownership belongs to some other UID
-# (e.g. leftovers from another account or CI run)
+# be created, or when existing entries are NOT usable by the invoking user.
+# Writability (group access counts) is what SQLite and the session files need;
+# .memory/dind must additionally be OWNED by the invoking user, because
+# rootless dockerd chmods it and fails with EPERM otherwise. Leftovers from
+# another account or CI run would break cryptically later without this guard.
 define prepare_memory
 for dir in .memory .memory/codebase-memory-mcp .memory/dind .memory/engram .memory/opencode; do \
 	if ! mkdir -p "$$dir"; then \
@@ -184,17 +185,19 @@ for dir in .memory .memory/codebase-memory-mcp .memory/dind .memory/engram .memo
 		exit 1; \
 	fi; \
 done; \
-unowned=""; \
+unusable=""; \
 for entry in .memory .memory/codebase-memory-mcp .memory/dind .memory/engram .memory/opencode \
 	.memory/opencode/opencode.db .memory/opencode/opencode.db-shm .memory/opencode/opencode.db-wal .memory/opencode/prompt-history.jsonl; do \
-	if [ -e "$$entry" ] && [ ! -O "$$entry" ]; then \
-		unowned="$$unowned $$entry"; \
+	if [ -e "$$entry" ]; then \
+		if [ ! -w "$$entry" ] || { [ "$$entry" = ".memory/dind" ] && [ ! -O "$$entry" ]; }; then \
+			unusable="$$unusable $$entry"; \
+		fi; \
 	fi; \
 done; \
-if [ -n "$$unowned" ]; then \
-	printf '%bERROR:%b .memory contains entries not owned by you (%s):\n' '$(RED)' '$(RESET)' "$$unowned"; \
+if [ -n "$$unusable" ]; then \
+	printf '%bERROR:%b .memory contains entries you cannot use (not writable, or .memory/dind not owned by you) (%s):\n' '$(RED)' '$(RESET)' "$$unusable"; \
 	echo "       Fix once with:"; \
-	echo "       sudo chown -R $$(id -u):$$(id -g) .memory"; \
+	echo "       sudo chown -R $$(id -u):$$(id -g) .memory && sudo chmod -R u+rwX .memory"; \
 	exit 1; \
 fi; \
 if ! touch .memory/opencode/opencode.db .memory/opencode/opencode.db-shm .memory/opencode/opencode.db-wal .memory/opencode/prompt-history.jsonl; then \
@@ -336,6 +339,10 @@ PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh docker
 .PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context custom-image check-pins run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
 
 # === Building ===
+
+# Explicit default target: without this, make picks the FIRST target defined
+# in this file (currently "context") as the default goal
+.DEFAULT_GOAL := help
 
 # Help first: This will be the default target
 help: # Display useful commands
