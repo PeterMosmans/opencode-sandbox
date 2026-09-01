@@ -13,7 +13,7 @@
 #     -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
 #     -D - -o /dev/null "https://registry-1.docker.io/v2/library/node/manifests/24-trixie-slim" \
 #     | grep -i docker-content-digest
-FROM node:24-trixie-slim@sha256:ab3eebe934147fee049b5eb83c570f68c849a13c930bdfa482de99fcdfa3b3de
+FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0
 
 ARG USER_ID=1001
 ARG GROUP_ID=1001
@@ -28,11 +28,13 @@ ARG BUILDX_VERSION
 ARG BUILDX_SHA256_AMD64
 ARG BUILDX_SHA256_ARM64
 
+# Default timezone, can be overridden
+ENV TZ=Europe/Amsterdam
+
 # Set some sane OpenCode and Openspec defaults
 ENV DO_NOT_TRACK=1
 ENV OPENSPEC_TELEMETRY=0
 ENV OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS=36000000
-# ENV OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=262144
 ENV OPENCODE_CONFIG_DIR=/home/node/.config/opencode
 ENV OPENCODE_DISABLE_AUTOUPDATE=true
 # Enable websearch - see https://opencode.ai/docs/tools/#websearch
@@ -95,6 +97,7 @@ RUN apt-get update && \
     slirp4netns \
     sshpass \
     tree \
+    tzdata \
     uidmap \
     unzip \
     whois \
@@ -102,6 +105,8 @@ RUN apt-get update && \
     yamllint \
     zip \
     zsh && \
+    ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # 4b: Install the buildx CLI plugin (version- and checksum-pinned).
