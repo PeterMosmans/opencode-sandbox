@@ -180,11 +180,14 @@ device flags with `DIND_DEVICE_FLAGS=` or pass extras via `DIND_EXTRA_FLAGS=`.
 port driver.
 
 If startup fails with `chmod .../.memory/dind: operation not permitted`, the
-`.memory` tree contains entries owned by a different user than the one running
-make. The preflight checks catch this before Docker starts — fix it once with:
+`.memory/dind` directory is owned by a different user than the one running
+make. The preflight checks catch this before Docker starts: every `.memory`
+entry must be writable by the invoking user (group permissions count), and
+`.memory/dind` must additionally be owned by them, because rootless dockerd
+chmods its data root. Fix it once with:
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" .memory
+sudo chown -R "$(id -u):$(id -g)" .memory && sudo chmod -R u+rwX .memory
 ```
 
 ### `make run-insecure`
