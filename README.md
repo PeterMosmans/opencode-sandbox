@@ -24,6 +24,9 @@ image:
 - **Engram** — Persistent memory MCP server
 - **codebase-memory-mcp** — Codebase knowledge graph
 
+You can easily add your own (Python) packages by either placing them in the
+`extra/` directory, and/or creating a file `extra/apt-packages.txt`.
+
 ## Threat model
 
 Two trust levels are separated:
@@ -37,35 +40,29 @@ The image enforces the boundary in the _user → host_ direction: normal runs ge
 no access to the host Docker daemon, no mounts outside the workspace, a
 read-only configuration, and run as a non-root user.
 
-### What user trust can see and change
-
-Everything inside the workspace is fully readable **and writable** by the
-sandbox, by design — including secrets that live there:
+### What user trust can see
 
 - `.env` (e.g. `OPENCODE_SERVER_PASSWORD`) is readable. If you keep secrets in
   it, assume the agent can read them.
 - `~/.local/share/opencode/auth.json` (LLM API keys) is mounted **read-only** —
-  it cannot be modified, but it **is readable**. Granting the agent LLM access
-  means granting it the key.
+  it cannot be modified, but it **is readable**.
 
 Furthermore the opencode configuration directory is mounted read-only, as well
 as a `~/.gitconfig` file (if present).
 
-### Persistent state (survives sessions)
+### What user trust can see and change
+
+Everything inside the workspace is fully readable **and writable** by the
+sandbox, by design - including persistent state.
 
 Workshop state under `.memory/` persists across runs and influences (future)
 sessions: Engram memories (`engram.db`), the codebase knowledge graph, the
 OpenCode session database and prompt history, and DinD images/containers
-(`.memory/dind/`). Content an agent (or a malicious prompt it processed) writes
-into memory today is trusted input for every future session. Deleting `.memory/`
-resets the agent environment entirely.
+(`.memory/dind/`).
 
-### The run-init trust window
-
-`make run-init` mounts the directory `~/.config/opencode` (skills, agents,
-rules) **read-write**. Anything written there becomes trusted, read-only
-configuration for _all future sessions_. Run it yourself first, review what was
-created, then hand autonomy to the agent.
+Content an agent (or a malicious prompt it processed) writes into memory today
+is trusted input for every future session. Deleting `.memory/` resets the agent
+environment entirely.
 
 ## Architecture
 
@@ -124,8 +121,14 @@ cp env.example .env
 make image
 ```
 
-Note that you can add extra (Python) packages inside the `extra/` directory -
-those will be installed automatically during the build.
+Note that you can customize the build without editing the Dockerfile by adding
+files inside the `extra/` directory (not part of this repository):
+
+- Every subdirectory with Python packaging metadata (pyproject.toml, setup.py or
+  setup.cfg) is installed into the sandbox's Python environment.
+- `extra/apt-packages.txt`: one Debian system package per line (blank lines and
+  lines starting with `#` are ignored) - those packages are installed during the
+  build.
 
 On a fresh machine where OpenCode has never been executed, the OpenCode
 configuration directory might not exist yet or is still empty. Use the one-time
@@ -180,11 +183,11 @@ device flags with `DIND_DEVICE_FLAGS=` or pass extras via `DIND_EXTRA_FLAGS=`.
 port driver.
 
 If startup fails with `chmod .../.memory/dind: operation not permitted`, the
-`.memory/dind` directory is owned by a different user than the one running
-make. The preflight checks catch this before Docker starts: every `.memory`
-entry must be writable by the invoking user (group permissions count), and
-`.memory/dind` must additionally be owned by them, because rootless dockerd
-chmods its data root. Fix it once with:
+`.memory/dind` directory is owned by a different user than the one running make.
+The preflight checks catch this before Docker starts: every `.memory` entry must
+be writable by the invoking user (group permissions count), and `.memory/dind`
+must additionally be owned by them, because rootless dockerd chmods its data
+root. Fix it once with:
 
 ```bash
 sudo chown -R "$(id -u):$(id -g)" .memory && sudo chmod -R u+rwX .memory
@@ -246,6 +249,13 @@ directory first, so the Docker build never walks the workspace — workspace
 entries owned by other users (e.g. `.memory/`) cannot break the build. The
 staging directory is removed after a successful build (kept for inspection when
 the build fails; `make clean` also removes it).
+
+### The run-init trust window
+
+`make run-init` mounts the directory `~/.config/opencode` (skills, agents,
+rules) **read-write**. Anything written there becomes trusted, read-only
+configuration for _all future sessions_. Run it yourself first, review what was
+created, then hand autonomy to the agent.
 
 ### Run
 

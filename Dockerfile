@@ -109,6 +109,24 @@ RUN apt-get update && \
     echo $TZ > /etc/timezone && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
+# 4a: Install optional extra system packages from extra/apt-packages.txt (if
+# any). One Debian package per line; '#' comments and blank lines are ignored.
+# This allows customizing the image without editing the Dockerfile. The COPY
+# is a silent no-op when the file does not exist in the build context.
+COPY extra/apt-packages.txt* /tmp/extra/
+RUN set -eux; \
+    f=/tmp/extra/apt-packages.txt; \
+    if [ -f "$f" ]; then \
+        pkgs="$(sed -e 's/\r$//' -e 's/#.*//' "$f" | xargs)"; \
+        if [ -n "$pkgs" ]; then \
+            echo "Installing extra system package(s): $pkgs"; \
+            apt-get update && \
+            apt-get install -y --no-install-recommends $pkgs; \
+        fi; \
+        rm -f "$f"; \
+    fi; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
 # 4b: Install the buildx CLI plugin (version- and checksum-pinned).
 # Without it, 'docker build' inside the rootless DinD daemon falls back to the
 # deprecated legacy builder (see https://docs.docker.com/go/buildx/). Once the
