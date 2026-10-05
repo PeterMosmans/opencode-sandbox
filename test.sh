@@ -294,10 +294,14 @@ print_summary() {
   local w_n=6 w_s=7 w_d=9 w_note=6
   local i len
   for ((i = 0; i < count; i++)); do
-    len=${#names[$i]} ;        [ "$len" -gt "$w_n" ] && w_n=$len
-    len=${#statuses[$i]} ;     [ "$len" -gt "$w_s" ] && w_s=$len
-    len=${#durations[$i]} ;    [ "$len" -gt "$w_d" ] && w_d=$len
-    len=${#notes[$i]} ;        [ "$len" -gt "$w_note" ] && w_note=$len
+    len=${#names[$i]}
+    [ "$len" -gt "$w_n" ] && w_n=$len
+    len=${#statuses[$i]}
+    [ "$len" -gt "$w_s" ] && w_s=$len
+    len=${#durations[$i]}
+    [ "$len" -gt "$w_d" ] && w_d=$len
+    len=${#notes[$i]}
+    [ "$len" -gt "$w_note" ] && w_note=$len
   done
   [ "${#HEADER_TEST}" -gt "$w_n" ] && w_n=${#HEADER_TEST}
   [ "${#HEADER_STATUS}" -gt "$w_s" ] && w_s=${#HEADER_STATUS}
@@ -310,9 +314,12 @@ print_summary() {
   }
 
   emit_row() {
-    emit_cell "$w_n" "$1";                 printf ' | '
-    emit_cell "$w_s" "$2" "$3";            printf ' | '
-    emit_cell "$w_d" "$4";                 printf ' | '
+    emit_cell "$w_n" "$1"
+    printf ' | '
+    emit_cell "$w_s" "$2" "$3"
+    printf ' | '
+    emit_cell "$w_d" "$4"
+    printf ' | '
     emit_cell "$w_note" "$5" "$6"
     printf '\n'
   }
@@ -400,7 +407,6 @@ test_doctors() {
   info "Testing agent-browser doctor"
   run_cmd agent-browser doctor
   run_cmd engram doctor
-  run_cmd bd doctor
   info "Testing codebase-memory-mcp connectivity"
   run_cmd codebase-memory-mcp cli list_projects
 }
@@ -560,6 +566,16 @@ test_versions() {
     ver="$(run_cmd "$cmd" --version)"
     echo "running ${cmd} version: ${BOLD}${ver}${RESET}"
   done
+  # Extra modules installed from extra/ at image build time (Dockerfile 8b):
+  # their console commands are listed in /etc/extra-modules.txt inside the image
+  if [ -n "$(run_cmd_shell '[ -f /etc/extra-modules.txt ] && echo yes')" ]; then
+    # shellcheck disable=SC2016
+    extras="$(run_cmd_shell 'while read -r c; do v="$("$c" --version 2>/dev/null | head -1)"; [ -n "$v" ] && echo "$c|$v"; done < /etc/extra-modules.txt')"
+    while IFS='|' read -r cmd ver; do
+      [ -n "$cmd" ] || continue
+      echo "running extra ${cmd} version: ${BOLD}${ver}${RESET}"
+    done <<< "$extras"
+  fi
 }
 
 # T2: optional end-to-end TLS check against a host-provided endpoint.
@@ -592,7 +608,6 @@ test_updates() {
     "@opencode-ai/plugin"
     "@opencode-ai/sdk"
     "@playwright/mcp"
-    "@beads/bd"
     agent-browser
     bash-language-server
     codebase-memory-mcp
