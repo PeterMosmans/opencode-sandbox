@@ -221,16 +221,21 @@ RUN /opt/venv/bin/playwright install --with-deps \
 COPY extra* /tmp/extra/
 RUN set -eux; \
     count=0; \
+    : > /tmp/extra-bin.txt; \
     for d in /tmp/extra/*/; do \
         [ -d "$d" ] || continue; \
         if [ -f "${d}pyproject.toml" ] || [ -f "${d}setup.py" ] || [ -f "${d}setup.cfg" ]; then \
+            ls /opt/venv/bin > /tmp/bin-before.txt; \
             pip install --no-cache-dir "$d"; \
+            ls /opt/venv/bin > /tmp/bin-after.txt; \
+            comm -13 /tmp/bin-before.txt /tmp/bin-after.txt >> /tmp/extra-bin.txt; \
             count=$((count + 1)); \
         else \
             echo "Skipping $d (no packaging metadata found)"; \
         fi; \
     done; \
-    rm -rf /tmp/extra; \
+    if [ "$count" -gt 0 ]; then cp /tmp/extra-bin.txt /etc/extra-modules.txt; fi; \
+    rm -rf /tmp/extra /tmp/extra-bin.txt /tmp/bin-before.txt /tmp/bin-after.txt; \
     echo "Installed ${count} optional extra module(s)"
 
 # 9: Set up some default locations for OpenCode
