@@ -107,9 +107,10 @@ RUN apt-get update && \
     zsh && \
     ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
     echo $TZ > /etc/timezone && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* && \
+    mkdir /tmp/extra
 
-# 4a: Install optional extra system packages from extra/apt-packages.txt (if
+# 5: Install optional extra system packages from extra/apt-packages.txt (if
 # any). One Debian package per line; '#' comments and blank lines are ignored.
 # This allows customizing the image without editing the Dockerfile. The COPY
 # is a silent no-op when the file does not exist in the build context.

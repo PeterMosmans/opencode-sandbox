@@ -396,6 +396,7 @@ image: context # Build a fresh OpenCode sandbox (with preflight check)
 	@printf '  -> USER_ID: %s\n' '$(shell id -u)'
 	@printf '  -> GROUP_ID: %s\n' '$(SANDBOX_GID)'
 	@printf '  -> DOCKER_GROUP: %s\n' '$(DOCKER_GID)'
+	@mkdir -p extra 1>/dev/null
 	@if docker build $(BUILD_CONTEXT) -t $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS); then \
 		$(call remove_build_context); \
 	else \
@@ -515,7 +516,6 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 	@$(call color_msg,  Image: $(IMAGE_NAME))
 	@$(call color_msg,  Type:  $(TYPE))
 	@$(call color_msg,  Skip e2e: $(or $(SKIP_E2E),no))
-	@mkdir -p tests/ 2>/dev/null
 	@export SKIP_E2E && docker run $(INTERACTIVE_FLAGS) \
 		$(SANDBOX_MOUNTS_EPHEMERAL) \
 		$(DIND_TEST_FLAGS) \
