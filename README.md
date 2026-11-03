@@ -226,6 +226,9 @@ cp env.example .env
 | `BUILDX_VERSION`                | `0.36.1`         | buildx plugin version (BuildKit inside rootless DinD)                                                                                                                                                                                              |
 | `BUILDX_SHA256_AMD64`           | pinned           | SHA256 of the buildx binary (amd64)                                                                                                                                                                                                                |
 | `BUILDX_SHA256_ARM64`           | pinned           | SHA256 of the buildx binary (arm64)                                                                                                                                                                                                                |
+| `COMPOSE_VERSION`               | `5.7.0`          | compose plugin version (`docker compose` support)                                                                                                                                                                                                  |
+| `COMPOSE_SHA256_AMD64`          | pinned           | SHA256 of the compose binary (amd64)                                                                                                                                                                                                               |
+| `COMPOSE_SHA256_ARM64`          | pinned           | SHA256 of the compose binary (arm64)                                                                                                                                                                                                               |
 | `GROUP`                         | default group    | Group for container files; baked in as GROUP_ID at build time. Images are tagged per group (`latest-g<gid>`), so runs always use the image matching the requested group. Rootless DinD requires the runtime gid to match the image's primary group |
 | `HOST_LEMONADE`                 | _(empty)_        | IP address to map `LEMONADE_HOST` to (for local dev)                                                                                                                                                                                               |
 | `LEMONADE_HOST`                 | _(empty)_        | Hostname for `--add-host` mapping (set in `.env`)                                                                                                                                                                                                  |
@@ -295,9 +298,9 @@ daemon for you.
 
 ### Supply chain
 
-- Build-time downloads (the Engram binary and the buildx plugin) are version-
-  **and** checksum-pinned: the build fails closed on a mismatched or missing
-  checksum.
+- Build-time downloads (the Engram binary, the buildx and compose plugins) are
+  version- and checksum-pinned: the build fails closed on a mismatched or
+  missing checksum.
 - The base image (`node:24-trixie-slim`) is pinned by digest — refresh it
   deliberately with the registry query documented in the Dockerfile.
 

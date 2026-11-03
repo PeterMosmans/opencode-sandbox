@@ -27,6 +27,11 @@ ARG BUILDX_VERSION
 # SHA256 per architecture of the buildx plugin binary (fail-closed when empty)
 ARG BUILDX_SHA256_AMD64
 ARG BUILDX_SHA256_ARM64
+# Docker Compose CLI plugin (pinned; latest stable from github.com/docker/compose/releases)
+ARG COMPOSE_VERSION
+# SHA256 per architecture of the compose plugin binary (fail-closed when empty)
+ARG COMPOSE_SHA256_AMD64
+ARG COMPOSE_SHA256_ARM64
 
 # Default timezone, can be overridden
 ENV TZ=Europe/Amsterdam
@@ -150,6 +155,27 @@ RUN set -eux; \
         "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${arch}" \
         -o /usr/local/lib/docker/cli-plugins/docker-buildx; \
     echo "${expected}  /usr/local/lib/docker/cli-plugins/docker-buildx" | sha256sum -c -
+
+# 4c: Install the docker compose CLI plugin (version- and checksum-pinned).
+# Provides 'docker compose' inside the image (the docker.io package ships
+# only the CLI). Upstream names its architectures x86_64/aarch64.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) expected="${COMPOSE_SHA256_AMD64}"; compose_arch="x86_64" ;; \
+        arm64) expected="${COMPOSE_SHA256_ARM64}"; compose_arch="aarch64" ;; \
+        *) echo "ERROR: no pinned checksum for architecture '$arch'" >&2; exit 1 ;; \
+    esac; \
+    if [ -z "$expected" ]; then \
+        echo "ERROR: build-arg COMPOSE_SHA256_${arch} is empty - the Makefile must pass it via --build-arg (stale checkout? re-sync Makefile + Dockerfile together)" >&2; \
+        exit 1; \
+    fi; \
+    expected="$(printf '%s' "$expected" | tr -d '\r\n \t')"; \
+    install -D -m 0755 /dev/null /usr/local/lib/docker/cli-plugins/docker-compose; \
+    curl -fsSL \
+        "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-${compose_arch}" \
+        -o /usr/local/lib/docker/cli-plugins/docker-compose; \
+    echo "${expected}  /usr/local/lib/docker/cli-plugins/docker-compose" | sha256sum -c -
 
 # 5: Ensure required groups exist.
 # Groups are keyed by GID (the docker group must match the HOST's docker GID,

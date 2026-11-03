@@ -68,11 +68,14 @@ OPENCODE_SERVER_USERNAME ?= $(shell id -u --name)
 OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
 ENGRAM_VERSION ?= 1.20.0
 BUILDX_VERSION ?= 0.36.1
+COMPOSE_VERSION ?= 5.7.0
 # SHA256 pins for build-time downloads (refresh together with the versions):
 #   curl -fsSL <artifact-url> | sha256sum
 ENGRAM_SHA256 ?= 7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca
 BUILDX_SHA256_AMD64 ?= 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
 BUILDX_SHA256_ARM64 ?= 5d0cafd9d16afe1a0f0d9529885344ace2cc99efdd531b6c783c5455a6001569
+COMPOSE_SHA256_AMD64 ?= 7758048ad38e580f22559603312874fec8bb638d021a9e64182385fc17cc12a2
+COMPOSE_SHA256_ARM64 ?= 15861535d14e26555736b49376c95e14bfd94285366c8446bfac7156a972e76f
 TARGET ?= example.com
 
 # Image tag defaults to "latest" for day-to-day builds. Override to tag
@@ -276,6 +279,9 @@ DOCKER_BUILD_ARGS := \
 	--build-arg BUILDX_VERSION=$(BUILDX_VERSION) \
 	--build-arg BUILDX_SHA256_AMD64=$(BUILDX_SHA256_AMD64) \
 	--build-arg BUILDX_SHA256_ARM64=$(BUILDX_SHA256_ARM64) \
+	--build-arg COMPOSE_VERSION=$(COMPOSE_VERSION) \
+	--build-arg COMPOSE_SHA256_AMD64=$(COMPOSE_SHA256_AMD64) \
+	--build-arg COMPOSE_SHA256_ARM64=$(COMPOSE_SHA256_ARM64) \
 	--build-arg USER_ID=$$(id -u) \
 	--build-arg GROUP_ID=$(SANDBOX_GID) \
 	--build-arg DOCKER_GROUP=$(DOCKER_GID)
@@ -393,6 +399,7 @@ image: context # Build a fresh OpenCode sandbox (with preflight check)
 	@$(call color_msg,Build arguments:)
 	@printf '  -> ENGRAM_VERSION: %s\n' '$(ENGRAM_VERSION)'
 	@printf '  -> BUILDX_VERSION: %s\n' '$(BUILDX_VERSION)'
+	@printf '  -> COMPOSE_VERSION: %s\n' '$(COMPOSE_VERSION)'
 	@printf '  -> USER_ID: %s\n' '$(shell id -u)'
 	@printf '  -> GROUP_ID: %s\n' '$(SANDBOX_GID)'
 	@printf '  -> DOCKER_GROUP: %s\n' '$(DOCKER_GID)'
@@ -585,9 +592,12 @@ check-pins: # Verify download checksum pins against upstream manifests (needs ne
 	@work=$$(mktemp -d); trap 'rm -rf $$work' EXIT INT TERM; \
 	curl -fsSL "https://github.com/Gentleman-Programming/engram/releases/download/v$(ENGRAM_VERSION)/checksums.txt" -o $$work/engram.txt || exit 1; \
 	curl -fsSL "https://github.com/docker/buildx/releases/download/v$(BUILDX_VERSION)/checksums.txt" -o $$work/buildx.txt || exit 1; \
+	curl -fsSL "https://github.com/docker/compose/releases/download/v$(COMPOSE_VERSION)/checksums.txt" -o $$work/compose.txt || exit 1; \
 	$(call check_one_pin,engram $(ENGRAM_VERSION) linux_amd64,$(ENGRAM_SHA256),$$work/engram.txt,engram_$(ENGRAM_VERSION)_linux_amd64.tar.gz); \
 	$(call check_one_pin,buildx $(BUILDX_VERSION) amd64,$(BUILDX_SHA256_AMD64),$$work/buildx.txt,buildx-v$(BUILDX_VERSION).linux-amd64); \
 	$(call check_one_pin,buildx $(BUILDX_VERSION) arm64,$(BUILDX_SHA256_ARM64),$$work/buildx.txt,buildx-v$(BUILDX_VERSION).linux-arm64); \
+	$(call check_one_pin,compose $(COMPOSE_VERSION) amd64,$(COMPOSE_SHA256_AMD64),$$work/compose.txt,docker-compose-linux-x86_64); \
+	$(call check_one_pin,compose $(COMPOSE_VERSION) arm64,$(COMPOSE_SHA256_ARM64),$$work/compose.txt,docker-compose-linux-aarch64); \
 	$(call status_msg,All download pins match upstream manifests)
 
 check-versions: # Compare package.json + requirements.txt versions against registries
