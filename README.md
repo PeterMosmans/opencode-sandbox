@@ -148,6 +148,21 @@ make run
 
 Afterwards, use `make run` as usual.
 
+### Running from another directory
+
+The sandbox can be driven from any project directory by pointing `make` at this
+Makefile. The current directory is then the project that gets mounted into the
+sandbox:
+
+```bash
+cd ~/my-project
+make -f /path/to/opencode-sandbox/Makefile run
+```
+
+Configuration files (`.env`, `locations.mk`, `Dockerfile.custom`, `extra/`) are
+resolved relative to the Makefile, not the current directory, so they only need
+to exist once next to the Makefile.
+
 ## Docker Access Modes
 
 | Mode                | Daemon                         | Escape reach          |
@@ -302,7 +317,28 @@ daemon for you.
   version- and checksum-pinned: the build fails closed on a mismatched or
   missing checksum.
 - The base image (`node:24-trixie-slim`) is pinned by digest — refresh it
-  deliberately with the registry query documented in the Dockerfile.
+  deliberately with `make audit-bump` (see below) or the registry query
+  documented in the Dockerfile.
+
+### Keeping pins up to date
+
+`scripts/version-audit.py` checks every pin against upstream and proposes
+bumps, so updating the image is one deliberate step instead of hunting down
+versions by hand:
+
+- `make check-versions` — checks npm (package.json), PyPI
+  (requirements.txt), the GitHub release binaries (version **and** pinned
+  checksums) and the base image digest; exit code = items needing attention.
+- `make audit-bump` — shows a patch with the proposed bumps; GitHub binary
+  bumps always include the fresh SHA256s from that release's
+  `checksums.txt` (no checksum, no bump). Apply with `make audit-bump
+WRITE=1` (or `make update-versions`).
+- `make check-pins` — verifies the current checksums against the upstream
+  manifests; run it after bumping, then rebuild.
+
+The tool needs `httpx`, `typer` and `rich`; it prefers a project venv
+(`python3 -m venv .venv && .venv/bin/pip install httpx typer rich`). Set
+`GITHUB_TOKEN` to raise the GitHub API rate limit.
 
 ## License
 
