@@ -48,6 +48,14 @@ ifneq ($(wildcard .env),)
 include .env
 endif
 
+# Source locations.mk for machine-specific extra mounts (if it exists).
+# Copy locations.mk.example to locations.mk to define SANDBOX_USER_MOUNTS;
+# without it the sandbox runs with the bare minimum mounts only.
+SANDBOX_USER_MOUNTS ?=
+ifneq ($(wildcard locations.mk),)
+include locations.mk
+endif
+
 # Project configuration
 PROJECT_NAME := $(notdir $(CURDIR))
 IMAGE_NAME := opencode-sandbox-$(shell id -u)
@@ -243,8 +251,8 @@ SANDBOX_OPTIONAL_MOUNTS := \
 	$(if $(wildcard ~/.agent-browser/config.json),-v ~/.agent-browser/config.json:/home/node/.agent-browser/config.json:ro) \
 	$(if $(wildcard ~/.local/share/opencode/auth.json),-v ~/.local/share/opencode/auth.json:/home/node/.local/share/opencode/auth.json:ro)
 
-# Final SANDBOX_MOUNTS composed of base + optional
-SANDBOX_MOUNTS := $(SANDBOX_BASE_MOUNTS) $(SANDBOX_OPTIONAL_MOUNTS)
+# Final SANDBOX_MOUNTS composed of base + optional + user-specific
+SANDBOX_MOUNTS := $(SANDBOX_BASE_MOUNTS) $(SANDBOX_OPTIONAL_MOUNTS) $(SANDBOX_USER_MOUNTS)
 
 # Ephemeral mounts (no .memory/ mappings)
 SANDBOX_MOUNTS_EPHEMERAL := $(SANDBOX_BASE_MOUNTS_EPHEMERAL) $(SANDBOX_OPTIONAL_MOUNTS)
@@ -339,7 +347,7 @@ context: # Stage an isolated build context (internal helper for image/custom-ima
 IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
 
 # Files included in package archive
-PACKED_FILES := env.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
+PACKED_FILES := env.example locations.mk.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
 .PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context custom-image check-pins run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile

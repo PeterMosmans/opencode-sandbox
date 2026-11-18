@@ -1,0 +1,11 @@
+# Template for locations.mk — machine-specific host locations
+#
+# Copy this file to locations.mk and adjust the paths for your machine.
+# The Makefile includes locations.mk when it exists; it is not part of the
+# repository. Every mount is skipped automatically when the host path does
+# not exist, so a missing optional location never breaks a sandbox run.
+
+# Extra read-only mounts added to normal and initial sandbox runs
+SANDBOX_USER_MOUNTS := \
+	$(if $(wildcard ~/my-project),-v ~/my-project:/opt/my-project:ro) \
+	$(if $(wildcard /opt/another-project),-v /opt/another-project:/opt/another-project:ro) \

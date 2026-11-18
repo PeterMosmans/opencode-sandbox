@@ -10,6 +10,8 @@ extra/
 *.pem
 # Environment files (use .env.example as template)
 .env
+# Machine-specific mount locations (use locations.mk.example as template)
+locations.mk
 # Dotfiles... except the .dockerignore file and this file :)
 .*
 !.dockerignore
