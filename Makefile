@@ -43,10 +43,20 @@ else
 SED_I := sed -i
 endif
 
+# Python interpreter for the version audit tool (prefers a project venv;
+# needs httpx, typer and rich: python3 -m venv .venv && .venv/bin/pip install httpx typer rich)
+PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
+
 # Source .env for version overrides (if it exists)
 ifneq ($(wildcard .env),)
 include .env
 endif
+
+# Project configuration
+PROJECT_NAME := $(notdir $(CURDIR))
+IMAGE_NAME := opencode-sandbox-$(shell id -u)
+TEST_IMAGE_NAME := $(IMAGE_NAME)-test
+PROJECT_ROOT ?= $(CURDIR)
 
 # Source locations.mk for machine-specific extra mounts (if it exists).
 # Copy locations.mk.example to locations.mk to define SANDBOX_USER_MOUNTS;
@@ -56,11 +66,6 @@ ifneq ($(wildcard locations.mk),)
 include locations.mk
 endif
 
-# Project configuration
-PROJECT_NAME := $(notdir $(CURDIR))
-IMAGE_NAME := opencode-sandbox-$(shell id -u)
-TEST_IMAGE_NAME := $(IMAGE_NAME)-test
-PROJECT_ROOT ?= $(CURDIR)
 CUSTOM_IMAGE_NAME ?= sandbox-opencode-custom-$(shell id -u)
 
 # Directory where the Makefile lives (for git operations)
@@ -350,7 +355,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example locations.mk.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context custom-image check-pins run-dind run-tests run-servers server package update-versions check-versions tag-version validate test-makefile
+.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context custom-image check-pins run-dind run-tests run-servers server package update-versions audit-bump check-versions tag-version validate test-makefile
 
 # === Building ===
 
@@ -579,12 +584,15 @@ package: # Create a zip archive with all files needed to build and test the imag
 
 # === Version Management ===
 
-update-versions: # Update package.json + requirements.txt with latest versions
-	@echo "Fetching latest versions from npm and updating package.json..."
-	@node scripts/update-versions.js
-	@echo ""
-	@echo "Fetching latest versions from PyPI and updating requirements.txt..."
-	@bash scripts/update-pip-versions.sh
+update-versions: # Apply latest versions (incl. fresh checksums) to all pin files
+	@$(PYTHON) scripts/version-audit.py bump --write
+
+audit-bump: # Show proposed bumps as a patch (WRITE=1 to apply)
+	@if [ "$(WRITE)" = "1" ]; then \
+		$(PYTHON) scripts/version-audit.py bump --write; \
+	else \
+		$(PYTHON) scripts/version-audit.py bump --patch; \
+	fi
 
 # Warn when .env contains Windows (CRLF) line endings: make silently keeps
 # the carriage return as part of each value, which corrupts version pins,
@@ -608,28 +616,5 @@ check-pins: # Verify download checksum pins against upstream manifests (needs ne
 	$(call check_one_pin,compose $(COMPOSE_VERSION) arm64,$(COMPOSE_SHA256_ARM64),$$work/compose.txt,docker-compose-linux-aarch64); \
 	$(call status_msg,All download pins match upstream manifests)
 
-check-versions: # Compare package.json + requirements.txt versions against registries
-	@UP_TO_DATE=0 && \
-	OUTDATED=0 && \
-	echo "Checking package.json versions against npm..." && \
-	_tmp=$$(mktemp) && \
-	node scripts/check-versions.js > "$$_tmp" 2>&1 && \
-	tail -n +1 "$$_tmp" | head -n -1 && \
-	NPM_SUMMARY=$$(tail -1 "$$_tmp") && \
-	rm -f "$$_tmp" && \
-	UP_TO_DATE=$$(echo "$$NPM_SUMMARY" | awk '{print $$1}') && \
-	OUTDATED=$$(echo "$$NPM_SUMMARY" | awk '{print $$2}') && \
-	echo "" && \
-	echo "Checking requirements.txt versions against PyPI..." && \
-	_tmp2=$$(mktemp) && \
-	bash scripts/check-pip-versions.sh > "$$_tmp2" 2>&1 || true && \
-	tail -n +1 "$$_tmp2" | head -n -1 && \
-	PIP_SUMMARY=$$(tail -1 "$$_tmp2") && \
-	P_UP=$$(echo "$$PIP_SUMMARY" | awk '{print $$1}') && \
-	P_OUT=$$(echo "$$PIP_SUMMARY" | awk '{print $$2}') && \
-	UP_TO_DATE=$$((UP_TO_DATE + P_UP)) && \
-	OUTDATED=$$((OUTDATED + P_OUT)) && \
-	rm -f "$$_tmp2" && \
-	echo "" && \
-	echo "Summary: $$UP_TO_DATE up to date, $$OUTDATED out of date." && \
-	exit $$OUTDATED
+check-versions: # Check every pin (npm, PyPI, GitHub, base image) against upstream
+	@$(PYTHON) scripts/version-audit.py check
