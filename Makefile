@@ -43,13 +43,24 @@ else
 SED_I := sed -i
 endif
 
-# Python interpreter for the version audit tool (prefers a project venv;
-# needs httpx, typer and rich: python3 -m venv .venv && .venv/bin/pip install httpx typer rich)
-PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
+# Python interpreter for the version audit tool (prefers the venv next to the
+# Makefile, then one in the current directory; needs httpx, typer and rich:
+# python3 -m venv .venv && .venv/bin/pip install httpx typer rich)
+PYTHON ?= $(firstword $(wildcard $(MAKE_DIR).venv/bin/python .venv/bin/python) python3)
 
-# Source .env for version overrides (if it exists)
-ifneq ($(wildcard .env),)
-include .env
+# Directory where the Makefile lives. Tooling-owned files (.env, locations.mk,
+# Dockerfile, package.json, scripts/) are resolved relative to this directory,
+# so `make -f /path/to/opencode-sandbox/Makefile` works from any directory.
+# Must be computed BEFORE the first include: MAKEFILE_LIST grows with every
+# included file, so lastword would point at the include instead of the Makefile.
+MAKE_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
+
+# Source .env for version overrides (if it exists). The copy next to the
+# Makefile wins; a copy in the current directory is only a fallback for
+# backwards compatibility.
+ENV_FILE := $(firstword $(wildcard $(MAKE_DIR).env) $(wildcard .env))
+ifneq ($(ENV_FILE),)
+include $(ENV_FILE)
 endif
 
 # Project configuration
@@ -59,24 +70,23 @@ TEST_IMAGE_NAME := $(IMAGE_NAME)-test
 PROJECT_ROOT ?= $(CURDIR)
 
 # Source locations.mk for machine-specific extra mounts (if it exists).
-# Copy locations.mk.example to locations.mk to define SANDBOX_USER_MOUNTS;
-# without it the sandbox runs with the bare minimum mounts only.
+# Copy locations.mk.example to locations.mk (next to the Makefile) to define
+# SANDBOX_USER_MOUNTS; without it the sandbox runs with the bare minimum
+# mounts only.
 SANDBOX_USER_MOUNTS ?=
-ifneq ($(wildcard locations.mk),)
-include locations.mk
+LOCATIONS_FILE := $(firstword $(wildcard $(MAKE_DIR)locations.mk) $(wildcard locations.mk))
+ifneq ($(LOCATIONS_FILE),)
+include $(LOCATIONS_FILE)
 endif
 
 CUSTOM_IMAGE_NAME ?= sandbox-opencode-custom-$(shell id -u)
-
-# Directory where the Makefile lives (for git operations)
-MAKE_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 
 # Port on which to test https:// connection
 HOST_PORT ?= 8000
 
 # OpenCode version is derived from the opencode-ai dependency in package.json.
 # Override via .env (OPENCODE_VERSION=...) if needed.
-OPENCODE_VERSION ?= $(shell node -e "console.log(require('./package.json').dependencies['opencode-ai'])")
+OPENCODE_VERSION ?= $(shell node -e "console.log(require('$(MAKE_DIR)package.json').dependencies['opencode-ai'])")
 OPENCODE_SERVER_USERNAME ?= $(shell id -u --name)
 OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
 ENGRAM_VERSION ?= 1.20.0
@@ -306,7 +316,7 @@ DOCKER_BUILD_ARGS := \
 # `override` makes the value immune to command-line reassignment: the rm
 # guard below must never be able to target anything but this fixed path.
 override BUILD_CONTEXT := .build-context
-BUILD_CONTEXT_FILES := Dockerfile docker-entrypoint.sh dockerd-sandboxed.sh package.json requirements.txt .dockerignore
+BUILD_CONTEXT_FILES := $(addprefix $(MAKE_DIR),Dockerfile docker-entrypoint.sh dockerd-sandboxed.sh package.json requirements.txt .dockerignore)
 
 # Guarded removal of the staging directory: refuses ONLY unsafe values
 # (empty, '.', '/'); a non-existent directory is a fine no-op for rm -rf.
@@ -340,18 +350,19 @@ context: # Stage an isolated build context (internal helper for image/custom-ima
 	@$(call remove_build_context)
 	@mkdir -p $(BUILD_CONTEXT)
 	@cp $(BUILD_CONTEXT_FILES) $(BUILD_CONTEXT)/
-	@if [ -e Dockerfile.custom ]; then cp Dockerfile.custom $(BUILD_CONTEXT)/; fi
-	@for pem in *.pem; do \
+	@if [ -e $(MAKE_DIR)Dockerfile.custom ]; then cp $(MAKE_DIR)Dockerfile.custom $(BUILD_CONTEXT)/; fi
+	@for pem in $(MAKE_DIR)*.pem; do \
 		if [ -e "$$pem" ]; then cp -- "$$pem" $(BUILD_CONTEXT)/; fi; \
 	done
-	@if [ -d extra ]; then \
-		cp -R extra $(BUILD_CONTEXT)/extra; \
+	@if [ -d $(MAKE_DIR)extra ]; then \
+		cp -R $(MAKE_DIR)extra $(BUILD_CONTEXT)/extra; \
 	fi
 
 # Shared docker image removal pattern
 IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
 
-# Files included in package archive
+# Files included in package archive (relative to $(MAKE_DIR); the target runs
+# zip from there so the archive keeps its relative layout)
 PACKED_FILES := env.example locations.mk.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
@@ -365,7 +376,7 @@ PACKED_FILES := env.example locations.mk.example Dockerfile .dockerignore docker
 
 # Help first: This will be the default target
 help: # Display useful commands
-	@grep -E '^[a-zA-Z_-]+:.*\s+#\s' Makefile | \
+	@grep -E '^[a-zA-Z_-]+:.*\s+#\s' '$(firstword $(MAKEFILE_LIST))' | \
 	awk 'BEGIN {FS = ":.*?# "}; {printf "\033[1;33m%-20s\033[0m %s\n", $$1, $$2}'
 
 preflight: # Check prerequisites before building
@@ -373,7 +384,7 @@ preflight: # Check prerequisites before building
 	@$(call warn_env_crlf)
 	@command -v docker >/dev/null 2>&1 || { $(call error_msg,ERROR: docker is not installed); exit 1; }
 	@docker info >/dev/null 2>&1 || { $(call error_msg,ERROR: docker daemon is not running); exit 1; }
-	@test -f Dockerfile || { $(call error_msg,ERROR: Dockerfile not found in $(CURDIR)); exit 1; }
+	@test -f $(MAKE_DIR)Dockerfile || { $(call error_msg,ERROR: Dockerfile not found in $(MAKE_DIR)); exit 1; }
 	@test -d ~/.config/opencode || { $(call error_msg,ERROR: ~/.config/opencode directory not found (required for run)); exit 1; }
 	@test -n "$(SANDBOX_GID)" || { $(call error_msg,ERROR: GROUP '$(GROUP)' does not resolve to a group ID (check .env and host groups)); exit 1; }
 	@$(call status_msg,All preflight checks passed)
@@ -416,7 +427,7 @@ image: context # Build a fresh OpenCode sandbox (with preflight check)
 	@printf '  -> USER_ID: %s\n' '$(shell id -u)'
 	@printf '  -> GROUP_ID: %s\n' '$(SANDBOX_GID)'
 	@printf '  -> DOCKER_GROUP: %s\n' '$(DOCKER_GID)'
-	@mkdir -p extra 1>/dev/null
+	@mkdir -p $(MAKE_DIR)extra 1>/dev/null
 	@if docker build $(BUILD_CONTEXT) -t $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS); then \
 		$(call remove_build_context); \
 	else \
@@ -429,7 +440,7 @@ tag-version: # Tag the latest image with the opencode-ai version from package.js
 	@$(call green_msg,Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION))
 
 custom-image: context # Build image from alternative Dockerfile with different name
-	@test -f Dockerfile.custom || { $(call error_msg,ERROR: Dockerfile.custom not found); exit 1; }
+	@test -f $(MAKE_DIR)Dockerfile.custom || { $(call error_msg,ERROR: Dockerfile.custom not found); exit 1; }
 	@$(call color_msg,Building image: $(CUSTOM_IMAGE_NAME)...)
 	@if docker build -f $(BUILD_CONTEXT)/Dockerfile.custom $(BUILD_CONTEXT) -t $(CUSTOM_IMAGE_NAME) -t $(CUSTOM_IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS); then \
 		$(call remove_build_context); \
@@ -531,7 +542,7 @@ run-dind: preflight-run # Run OpenCode sandboxed with a private rootless Docker 
 DIND_TEST_FLAGS := $(if $(filter dind,$(TYPE)),-e DIND=1 -e DIND_DATA_ROOT=/$(PROJECT_NAME)/.memory/dind $(DIND_DEVICE_FLAGS) $(DIND_SECURITY_FLAGS))
 
 run-tests: preflight-run # Run tests inside Docker container (make run-tests IMAGE=my-image TYPE=full)
-	@test -x test.sh || { $(call error_msg,test.sh not found or not executable); exit 1; }
+	@test -x $(MAKE_DIR)test.sh || { $(call error_msg,test.sh not found or not executable); exit 1; }
 	@$(call color_msg,Running tests inside Docker container...)
 	@$(call color_msg,  Image: $(IMAGE_NAME))
 	@$(call color_msg,  Type:  $(TYPE))
@@ -541,20 +552,20 @@ run-tests: preflight-run # Run tests inside Docker container (make run-tests IMA
 		$(DIND_TEST_FLAGS) \
 		-e SKIP_E2E=$${SKIP_E2E:-} \
 	    -v $(CURDIR)/tests:/tests:rw \
-		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
+		-v $(MAKE_DIR)test.sh:/home/node/test.sh:ro \
 		-u $$(id -u):$(SANDBOX_GID) \
 		$(IMAGE_NAME) \
 		/bin/bash /home/node/test.sh "${IMAGE:-$(IMAGE_NAME)}" "${TYPE:-full}" bare
 
 run-servers: preflight-run # Test LLM server connectivity from inside Docker container
-	@test -x test.sh || { $(call error_msg,test.sh not found or not executable); exit 1; }
+	@test -x $(MAKE_DIR)test.sh || { $(call error_msg,test.sh not found or not executable); exit 1; }
 	@$(call color_msg,Testing LLM server connectivity inside Docker container...)
 	@$(call color_msg,  Image: $(IMAGE_NAME))
 	@mkdir -p tests/ 2>/dev/null
 	@docker run $(INTERACTIVE_FLAGS) \
 		$(SANDBOX_MOUNTS) \
 	    -v $(CURDIR)/tests:/tests:rw \
-		-v $(CURDIR)/test.sh:/home/node/test.sh:ro \
+		-v $(MAKE_DIR)test.sh:/home/node/test.sh:ro \
 		-u $$(id -u):$(SANDBOX_GID) \
 		$(IMAGE_NAME) \
 		/bin/bash /home/node/test.sh "${IMAGE:-$(IMAGE_NAME)}" "servers" bare
@@ -562,7 +573,7 @@ run-servers: preflight-run # Test LLM server connectivity from inside Docker con
 # === Testing ===
 
 validate: # Run all Makefile validation tests
-	@bash tests/makefile-tests.sh
+	@bash $(MAKE_DIR)tests/makefile-tests.sh
 
 test-makefile: validate # Alias for validate target
 
@@ -578,20 +589,20 @@ remove: # Remove all sandbox image variants (tags and untagged)
 	done
 
 package: # Create a zip archive with all files needed to build and test the image, named with version tag
-	@zip -qr "sandbox-$(IMAGE_TAG).zip" $(PACKED_FILES) $(if $(wildcard extra),extra,) \
+	@cd $(MAKE_DIR) && zip -qr "$(CURDIR)/sandbox-$(IMAGE_TAG).zip" $(PACKED_FILES) $(if $(wildcard $(MAKE_DIR)extra),extra,) \
 		-x '*__pycache__*' '*.pytest_cache*' '*.ruff_cache*' '*.egg-info*'
 	@$(call status_msg,Created sandbox-$(IMAGE_TAG).zip)
 
 # === Version Management ===
 
 update-versions: # Apply latest versions (incl. fresh checksums) to all pin files
-	@$(PYTHON) scripts/version-audit.py bump --write
+	@$(PYTHON) $(MAKE_DIR)scripts/version-audit.py bump --write
 
 audit-bump: # Show proposed bumps as a patch (WRITE=1 to apply)
 	@if [ "$(WRITE)" = "1" ]; then \
-		$(PYTHON) scripts/version-audit.py bump --write; \
+		$(PYTHON) $(MAKE_DIR)scripts/version-audit.py bump --write; \
 	else \
-		$(PYTHON) scripts/version-audit.py bump --patch; \
+		$(PYTHON) $(MAKE_DIR)scripts/version-audit.py bump --patch; \
 	fi
 
 # Warn when .env contains Windows (CRLF) line endings: make silently keeps
@@ -599,8 +610,8 @@ audit-bump: # Show proposed bumps as a patch (WRITE=1 to apply)
 # checksums, URLs and flags. WSL2 round-trips through Windows editors cause
 # this regularly.
 define warn_env_crlf
-	if [ -f .env ] && grep -q $$'\r' .env; then \
-		printf '%bWARNING: .env contains Windows (CRLF) line endings - values carry trailing carriage returns and corrupt build args (versions, checksums).%b Fix with: dos2unix .env, or: sed -i "%s" .env\n' "$(YELLOW)" "$(RESET)" 's/\r$$//g'; \
+	if [ -n "$(ENV_FILE)" ] && grep -q $$'\r' "$(ENV_FILE)"; then \
+		printf '%bWARNING: $(ENV_FILE) contains Windows (CRLF) line endings - values carry trailing carriage returns and corrupt build args (versions, checksums).%b Fix with: dos2unix $(ENV_FILE), or: sed -i "%s" $(ENV_FILE)\n' "$(YELLOW)" "$(RESET)" 's/\r$$//g'; \
 	fi
 endef
 
@@ -617,4 +628,4 @@ check-pins: # Verify download checksum pins against upstream manifests (needs ne
 	$(call status_msg,All download pins match upstream manifests)
 
 check-versions: # Check every pin (npm, PyPI, GitHub, base image) against upstream
-	@$(PYTHON) scripts/version-audit.py check
+	@$(PYTHON) $(MAKE_DIR)scripts/version-audit.py check
