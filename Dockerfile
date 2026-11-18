@@ -57,7 +57,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/google/chrome/chrome
 ENV PLAYWRIGHT_MCP_USER_DATA_DIR=/home/node/.memory/playwright-mcp/
 
 # Add Python package location to the path
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PATH="/opt/venv/bin:$PATH:/usr/games"
 
 # 2: Install optional custom CA certificates into the system trust store
 # (update-ca-certificates requires the .crt extension)
@@ -98,6 +98,7 @@ RUN apt-get update && \
     python3-venv \
     ripgrep \
     rootlesskit \
+    rsync \
     shellcheck \
     slirp4netns \
     sshpass \
