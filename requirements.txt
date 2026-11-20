@@ -8,5 +8,5 @@ publicsuffix2==2.20191221
 pyright==1.1.414
 pytest-playwright==0.10.0
 rich==15.0.0
-ruff==0.17.5
+ruff==0.17.6
 typer==0.29.2

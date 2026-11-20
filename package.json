@@ -6,7 +6,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.93",
     "@biomejs/biome": "2.6.8",
-    "@fission-ai/openspec": "2.1.0",
+    "@fission-ai/openspec": "2.1.1",
     "@opencode-ai/plugin": "1.19.6",
     "@opencode-ai/sdk": "1.19.6",
     "@playwright/mcp": "0.0.86",
@@ -22,7 +22,7 @@
     "prettier-plugin-nginx": "2.0.0",
     "prettier-plugin-sh": "0.20.2",
     "prettier-plugin-toml": "4.1.0",
-    "stylelint": "18.0.0",
+    "stylelint": "18.1.0",
     "webcrack": "2.16.0",
     "yaml-language-server": "2.0.0"
   }
