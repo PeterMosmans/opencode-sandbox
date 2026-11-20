@@ -57,10 +57,18 @@ MAKE_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 
 # Source .env for version overrides (if it exists). The copy next to the
 # Makefile wins; a copy in the current directory is only a fallback for
-# backwards compatibility.
+# backwards compatibility. Assignments are rewritten to "?=" (via a filtered
+# temp copy) so variables set on the command line or in the environment keep
+# precedence over .env values: a plain include lets .env silently clobber
+# the environment, because makefile assignments beat environment variables.
+# Precedence: command line > environment > .env > Makefile defaults.
 ENV_FILE := $(firstword $(wildcard $(MAKE_DIR).env) $(wildcard .env))
 ifneq ($(ENV_FILE),)
-include $(ENV_FILE)
+ENV_FILE_FILTERED := $(shell tmp=$$(mktemp) && sed -E 's/^([[:space:]]*[A-Za-z_][A-Za-z0-9_]*)([[:space:]]*)=/\1\2 ?= /' '$(ENV_FILE)' >"$$tmp" && echo "$$tmp")
+# -include: the temp copy is removed right after parsing, so make must not
+# try to remake it as an included makefile.
+-include $(ENV_FILE_FILTERED)
+$(shell rm -f "$(ENV_FILE_FILTERED)")
 endif
 
 # Project configuration
@@ -90,13 +98,13 @@ OPENCODE_VERSION ?= $(shell node -e "console.log(require('$(MAKE_DIR)package.jso
 OPENCODE_SERVER_USERNAME ?= $(shell id -u --name)
 OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
 ENGRAM_VERSION ?= 3.7.2
-BUILDX_VERSION ?= 0.39.0
+BUILDX_VERSION ?= 0.39.1
 COMPOSE_VERSION ?= 5.8.0
 # SHA256 pins for build-time downloads (refresh together with the versions):
 #   curl -fsSL <artifact-url> | sha256sum
 ENGRAM_SHA256 ?= 8db9d5db1c1574b8b830aac4ffbe86c024014aed6b9a3f0406ac3361a152cdf0
-BUILDX_SHA256_AMD64 ?= 5fb31a097304fbf6dd4038649a0decf32c2b9510e4047acd7d68b9d700c46194
-BUILDX_SHA256_ARM64 ?= 722cdcdfdd6f3fb943fa1ba75102d057feb18ba72aab93b1b0a8cf2b2b48a25f
+BUILDX_SHA256_AMD64 ?= 903090816da68f8bc1a2ff5346dd163a5adacfce4548d003c75df42cd47a9bf4
+BUILDX_SHA256_ARM64 ?= 05c88e0f9152825e609a1cdb391faf14d5f94d23d071eaecb87bae69d98da8b8
 COMPOSE_SHA256_AMD64 ?= b8840f5008c447f41fce0a57ae3adeab42c89b1eb6e6012524bcabbfb4ffbaf6
 COMPOSE_SHA256_ARM64 ?= 1a9c918b2fb49b9c87f0018c64b5abd0d30715155e98dc939779fbaee6c414d3
 TARGET ?= example.com
