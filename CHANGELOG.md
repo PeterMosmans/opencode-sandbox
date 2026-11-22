@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.2.3](/github.com/PeterMosmans/opencode-sandbox/compare/v0.2.2...v0.2.3) (2026-11-22)
+
+### Features
+
+* use correct naming ([1d0c086](/github.com/PeterMosmans/opencode-sandbox/commit/1d0c086e2ea206299e4f2f8c25a893a2af1b0f62))
+
+### Bug Fixes
+
+* let environment override .env in Makefile ([ebca9d7](/github.com/PeterMosmans/opencode-sandbox/commit/ebca9d7091b989198628e682757b3cbf45c10938))
+
 ## 0.2.2 (2026-11-19)
 
 ### Features
