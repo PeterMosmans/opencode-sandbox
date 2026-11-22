@@ -92,9 +92,9 @@ CUSTOM_IMAGE_NAME ?= sandbox-opencode-custom-$(shell id -u)
 # Port on which to test https:// connection
 HOST_PORT ?= 8000
 
-# OpenCode version is derived from the opencode-ai dependency in package.json.
+# OpenCode version is derived from the @opencode/cli dependency in package.json.
 # Override via .env (OPENCODE_VERSION=...) if needed.
-OPENCODE_VERSION ?= $(shell node -e "console.log(require('$(MAKE_DIR)package.json').dependencies['opencode-ai'])")
+OPENCODE_VERSION ?= $(shell node -e "console.log(require('$(MAKE_DIR)package.json').dependencies['@opencode/cli'])")
 OPENCODE_SERVER_USERNAME ?= $(shell id -u --name)
 OPENCODE_SERVER_PASSWORD ?= $(shell id -u --name)
 ENGRAM_VERSION ?= 3.7.2
@@ -443,7 +443,7 @@ image: context # Build a fresh OpenCode sandbox (with preflight check)
 		exit 1; \
 	fi
 
-tag-version: # Tag the latest image with the opencode-ai version from package.json
+tag-version: # Tag the latest image with the @opencode/cli version from package.json
 	@docker tag $(IMAGE_NAME):latest $(IMAGE_NAME):$(OPENCODE_VERSION)
 	@$(call green_msg,Tagged $(IMAGE_NAME):latest → $(IMAGE_NAME):$(OPENCODE_VERSION))
 

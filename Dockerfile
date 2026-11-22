@@ -212,6 +212,7 @@ RUN echo "node:100000:65536" >> /etc/subuid && \
 COPY package.json /tmp/package.json
 RUN npm install -g --prefer-dedupe \
     --prefix /usr/local \
+    --allow-scripts=@opencode/cli \
     $(node -e "const deps = require('/tmp/package.json').dependencies; console.log(Object.entries(deps).map(([k,v]) => v === 'latest' ? k : k + '@' + v).join(' '))") \
     && rm -rf /root/.npm /tmp/*
 

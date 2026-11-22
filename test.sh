@@ -605,15 +605,15 @@ test_updates() {
   local npm_pkgs=(
     "@biomejs/biome"
     "@fission-ai/openspec"
-    "@opencode-ai/plugin"
-    "@opencode-ai/sdk"
+    "@opencode/cli"
+    "@opencode/plugin"
+    "@opencode/sdk"
     "@playwright/mcp"
     agent-browser
     bash-language-server
     codebase-memory-mcp
     commit-and-tag-version
     htmlhint
-    opencode-ai
     prettier
     "@prettier/plugin-xml"
     prettier-plugin-ini
