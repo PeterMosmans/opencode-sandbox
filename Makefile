@@ -298,10 +298,10 @@ SANDBOX_BASE_MOUNTS_INIT := -u $$(id -u):$(SANDBOX_GID) \
 SANDBOX_MOUNTS_INIT := $(SANDBOX_BASE_MOUNTS_INIT) $(SANDBOX_OPTIONAL_MOUNTS)
 
 # Used by run-init to enforce that it only bootstraps a FRESH configuration:
-# a single seed opencode.json is allowed to exist, everything else means
-# the configuration directory is already in use
-HOST_CONFIG_SEED := $(HOME)/.config/opencode/opencode.json
-HOST_CONFIG_EXTRA := $(filter-out $(HOST_CONFIG_SEED),$(wildcard $(HOME)/.config/opencode/*))
+# a single seed opencode.json (or opencode.jsonc, the v2 name) is allowed to
+# exist, everything else means the configuration directory is already in use
+HOST_CONFIG_SEEDS := $(HOME)/.config/opencode/opencode.json $(HOME)/.config/opencode/opencode.jsonc
+HOST_CONFIG_EXTRA := $(filter-out $(HOST_CONFIG_SEEDS),$(wildcard $(HOME)/.config/opencode/*))
 
 # Shared docker build arguments (non-npm packages and runtime config only)
 DOCKER_BUILD_ARGS := \
@@ -478,10 +478,11 @@ latest: run # Run OpenCode sandboxed with latest tag
 
 # Identical to run, except that the OpenCode configuration directory is
 # mounted READ-WRITE (SANDBOX_MOUNTS_INIT) so OpenCode can bootstrap its own
-# configuration on a fresh machine. A single seed opencode.json may be placed
-# there in advance; any other content blocks it unless FORCE=1 is set
+# configuration on a fresh machine. A single seed opencode.json (or the v2
+# opencode.jsonc) may be placed there in advance; any other content blocks it
+# unless FORCE=1 is set
 run-init: preflight-init # ONE-TIME initial run: mounts OpenCode config dir READ-WRITE to bootstrap it
-	@test -z "$(HOST_CONFIG_EXTRA)" || [ "$(FORCE)" = "1" ] || { $(call error_msg,ERROR: $(HOME)/.config/opencode contains unexpected entries); echo "       Only a single seed opencode.json is allowed to pre-exist for a first run"; echo "       Remove other files - or re-run this target with FORCE=1 to keep them"; exit 1; }
+	@test -z "$(HOST_CONFIG_EXTRA)" || [ "$(FORCE)" = "1" ] || { $(call error_msg,ERROR: $(HOME)/.config/opencode contains unexpected entries); echo "       Only a single seed opencode.json or opencode.jsonc is allowed to pre-exist for a first run"; echo "       Remove other files - or re-run this target with FORCE=1 to keep them"; exit 1; }
 	@$(call color_msg,Running initial sandbox run - OpenCode config directory is WRITABLE:)
 	@$(call show_image_tag,$(TAG))
 	@$(call show_lemonade)

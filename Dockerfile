@@ -13,7 +13,7 @@
 #     -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
 #     -D - -o /dev/null "https://registry-1.docker.io/v2/library/node/manifests/24-trixie-slim" \
 #     | grep -i docker-content-digest
-FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0
+FROM node:24-trixie-slim@sha256:4d00acb4bcc42c454c4eb801526f7ad7f772ea3bd4fd168c5cc2e384abcbb9d4
 
 ARG USER_ID=1001
 ARG GROUP_ID=1001
