@@ -134,9 +134,9 @@ On a fresh machine where OpenCode has never been executed, the OpenCode
 configuration directory might not exist yet or is still empty. Use the one-time
 `make run-init` for the initial run: it creates the directory if needed and
 mounts it read-write, so OpenCode can bootstrap its own configuration files.
-Optionally, place a seed `opencode.json` there in advance — that is the only
-file allowed to pre-exist. Anything else blocks the bootstrap run (override with
-FORCE=1).
+Optionally, place a seed `opencode.json` (or `opencode.jsonc`, the v2 name)
+there in advance — that is the only file allowed to pre-exist. Anything else
+blocks the bootstrap run (override with FORCE=1).
 
 ```bash
 # First time only: bootstrap the OpenCode configuration directory
