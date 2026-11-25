@@ -120,6 +120,55 @@ run_cmd_shell() {
   fi
 }
 
+# === OpenCode config file ===
+#
+# OpenCode v2 accepts opencode.jsonc (JSON with comments) as an alternative
+# name for opencode.json. resolve_config_file asks the container which file
+# actually exists (an explicit $OPENCODE_CONFIG always wins); config_jq runs
+# a jq filter against it. jq cannot parse JSONC comments, so for .jsonc the
+# comments are stripped with node (present in the image) first — the whole
+# pipeline runs inside the container, because that is where jq lives.
+
+# Strip // and /* */ comments from JSONC input, keeping strings intact
+JSONC_STRIP_JS='const s=require("fs").readFileSync(process.argv[1],"utf8");process.stdout.write(s.replace(/"(?:[^"\\]|\\.)*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,(m)=>m[0]==="\""?m:""))'
+
+# Print the path of the OpenCode config file inside the container; falls back
+# to the classic opencode.json path when no config exists yet (callers check
+# existence themselves)
+resolve_config_file() {
+  local config_file
+  # shellcheck disable=SC2016
+  config_file="$(run_cmd sh -c '
+    if [ -n "${OPENCODE_CONFIG:-}" ]; then
+      f="$OPENCODE_CONFIG"
+    else
+      f="$HOME/.config/opencode/opencode.json"
+      if [ ! -e "$f" ] && [ -e "$HOME/.config/opencode/opencode.jsonc" ]; then
+        f="$HOME/.config/opencode/opencode.jsonc"
+      fi
+    fi
+    # Expand a leading ~ only if present (quote ~ to prevent tilde expansion)
+    case "$f" in
+      "~"/*) f="${HOME}/${f#"~"/}" ;;
+    esac
+    echo "$f"
+  ' 2> /dev/null)"
+  printf '%s\n' "${config_file:-/home/node/.config/opencode/opencode.json}"
+}
+
+# Run jq against the config file: config_jq FILE JQ_FILTER [extra jq args...]
+config_jq() {
+  local file="$1"
+  shift
+  # shellcheck disable=SC2016
+  run_cmd bash -c '
+    case "$1" in
+      *.jsonc) node -e "$2" "$1" ;;
+      *) cat "$1" ;;
+    esac | jq -r "$3" "${@:4}"
+  ' bash "$file" "$JSONC_STRIP_JS" "$@" 2> /dev/null
+}
+
 # === Test dependency tracking ===
 #
 # STATE mirrors the outcome of gate-providing steps (config, servers,
@@ -481,18 +530,7 @@ test_servers() {
 
   # Resolve config file path entirely inside the container
   local config_file
-  # shellcheck disable=SC2016
-  config_file="$(run_cmd sh -c '
-    f="${OPENCODE_CONFIG:-~/.config/opencode/opencode.json}"
-    # Expand ~ only if present (quote ~ to prevent shell tilde expansion in pattern)
-    case "$f" in
-      "~"/*) f="${HOME}/${f#"~"/}" ;;
-    esac
-    echo "$f"
-  ' 2> /dev/null)"
-
-  # Fallback if run_cmd failed
-  config_file="${config_file:-/home/node/.config/opencode/opencode.json}"
+  config_file="$(resolve_config_file)"
 
   if ! run_cmd test -f "$config_file"; then
     SKIP_NOTE="no OpenCode config"
@@ -500,7 +538,7 @@ test_servers() {
   fi
 
   local default_model
-  default_model="$(run_cmd jq -r '.model // empty' "$config_file" 2> /dev/null)"
+  default_model="$(config_jq "$config_file" '.model // empty')"
   if [ -z "$default_model" ]; then
     info "No default model set in config — testing all configured servers"
     default_model="all"
@@ -508,7 +546,7 @@ test_servers() {
 
   # Build a list of all server URLs
   local all_urls
-  all_urls="$(run_cmd jq -r '.provider | to_entries[] | "\(.key)|\(.value.options.baseURL)"' "$config_file" 2> /dev/null)"
+  all_urls="$(config_jq "$config_file" '.provider | to_entries[] | "\(.key)|\(.value.options.baseURL)"')"
   if [ -z "$all_urls" ]; then
     SKIP_NOTE="no provider URLs in config"
     return 2
@@ -521,11 +559,9 @@ test_servers() {
     provider_name="${default_model%/*}"
     model_name="${default_model#*/}"
     # shellcheck disable=SC2016
-    required_urls="$(run_cmd jq -r --arg provider "$provider_name" --arg model "$model_name" '
-      .provider | to_entries[]
-      | select(.key == $provider and .value.models[$model] != null)
-      | "\(.key)|\(.value.options.baseURL)"
-    ' "$config_file" 2> /dev/null)"
+    required_urls="$(config_jq "$config_file" \
+      '.provider | to_entries[] | select(.key == $provider and .value.models[$model] != null) | "\(.key)|\(.value.options.baseURL)"' \
+      --arg provider "$provider_name" --arg model "$model_name")"
   fi
 
   local required_fail=0
@@ -672,27 +708,23 @@ test_updates() {
 test_config() {
   info "Testing OpenCode configuration..."
   local config_file
-  # shellcheck disable=SC2016
-  config_file="$(run_cmd sh -c 'echo "${OPENCODE_CONFIG:-~/.config/opencode/opencode.json}"' 2> /dev/null || echo "")"
-  config_file="${config_file:-~/.config/opencode/opencode.json}"
-  # Resolve ~ to actual home
-  config_file="${config_file/#\~/$HOME}"
+  config_file="$(resolve_config_file)"
 
   if run_cmd test -f "$config_file"; then
     success "Configuration file found: ${BOLD}${config_file}${RESET}"
 
     if run_cmd command -v jq > /dev/null 2>&1; then
       local model
-      model="$(run_cmd jq -r '.model // "not set"' "$config_file" 2> /dev/null)"
+      model="$(config_jq "$config_file" '.model // "not set"')"
       printf '  Default model: %b%s%b\n' "$BOLD" "$model" "$RESET"
 
       local providers
-      providers="$(run_cmd jq -r '.provider // {} | keys[]' "$config_file" 2> /dev/null)"
+      providers="$(config_jq "$config_file" '.provider // {} | keys[]')"
       if [ -n "$providers" ]; then
         printf '  Providers:\n'
         while IFS= read -r provider; do
           local url
-          url="$(run_cmd jq -r ".provider[\"${provider}\"].options.baseURL // \"not set\"" "$config_file" 2> /dev/null)"
+          url="$(config_jq "$config_file" ".provider[\"${provider}\"].options.baseURL // \"not set\"")"
           printf '    %b%s%b -> %s\n' "$BOLD" "$provider" "$RESET" "$url"
         done <<< "$providers"
       fi
