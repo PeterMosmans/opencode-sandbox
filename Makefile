@@ -366,6 +366,32 @@ context: # Stage an isolated build context (internal helper for image/custom-ima
 		cp -R $(MAKE_DIR)extra $(BUILD_CONTEXT)/extra; \
 	fi
 
+# Guard for the fresh-clone build (regression test). BuildKit tolerates a
+# wildcard COPY that matches nothing ONLY when the wildcard's parent is the
+# build-context root: 'COPY extra* /dst/' is a silent no-op, while a nested
+# pattern like 'COPY extra/apt-packages.txt* /dst/' aborts the build with a
+# misleading 'lstat .../extra: no such file or directory'. Because extra/ is not
+# part of this repository, a fresh clone exercises exactly that path. This
+# target resolves every optional (wildcard) COPY of the Dockerfile against an
+# empty 'FROM scratch' stage, with extra/ and *.pem removed from the staged
+# context: sub-second, and no base image pull is needed.
+check-context: context # Verify optional build inputs resolve without extra/ (fresh clone)
+	@$(call bold_msg,Checking optional build inputs (staged context without extra/))
+	@rm -rf -- $(BUILD_CONTEXT)/extra; rm -f -- $(BUILD_CONTEXT)/*.pem
+	@printf 'FROM scratch\n' > $(BUILD_CONTEXT)/Dockerfile.check-context
+	@awk '/^COPY[ \t]/ && !/--from=/ && /\*/ {print}' '$(BUILD_CONTEXT)/Dockerfile' >> '$(BUILD_CONTEXT)/Dockerfile.check-context'
+	@out="$$(docker build -f $(BUILD_CONTEXT)/Dockerfile.check-context $(BUILD_CONTEXT) -q 2>&1)"; rc=$$?; \
+		rm -f $(BUILD_CONTEXT)/Dockerfile.check-context; \
+		if [ $$rc -eq 0 ]; then \
+			$(call green_msg,Optional build inputs resolve with no extra/ present); \
+			$(call remove_build_context); \
+		else \
+			printf '%s\n' "$$out" | grep -E 'ERROR|failed' | head -5; \
+			$(call error_msg,Optional build inputs do not resolve: a fresh clone cannot build this image); \
+			printf '  %s kept for inspection\n' '$(BUILD_CONTEXT)'; \
+			exit 1; \
+		fi
+
 # Shared docker image removal pattern
 IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_NAME):* $(CUSTOM_IMAGE_NAME) $(CUSTOM_IMAGE_NAME):*
 
@@ -374,7 +400,7 @@ IMAGE_PATTERNS := $(IMAGE_NAME) $(IMAGE_NAME):* $(TEST_IMAGE_NAME) $(TEST_IMAGE_
 PACKED_FILES := env.example locations.mk.example Dockerfile .dockerignore docker-entrypoint.sh dockerd-sandboxed.sh Makefile test.sh README.md package.json requirements.txt
 
 # === .PHONY ===
-.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context custom-image check-pins run-dind run-tests run-servers server package update-versions audit-bump check-versions tag-version validate test-makefile
+.PHONY: help preflight preflight-run preflight-init preflight-insecure build run latest run-init run-ephemeral run-insecure bash clean image context check-context custom-image check-pins run-dind run-tests run-servers server package update-versions audit-bump check-versions tag-version validate test-makefile
 
 # === Building ===
 
@@ -435,7 +461,6 @@ image: context # Build a fresh OpenCode sandbox (with preflight check)
 	@printf '  -> USER_ID: %s\n' '$(shell id -u)'
 	@printf '  -> GROUP_ID: %s\n' '$(SANDBOX_GID)'
 	@printf '  -> DOCKER_GROUP: %s\n' '$(DOCKER_GID)'
-	@mkdir -p $(MAKE_DIR)extra 1>/dev/null
 	@if docker build $(BUILD_CONTEXT) -t $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_BUILD_ARGS); then \
 		$(call remove_build_context); \
 	else \

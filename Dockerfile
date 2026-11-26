@@ -113,25 +113,6 @@ RUN apt-get update && \
     zsh && \
     ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
     echo $TZ > /etc/timezone && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* && \
-    mkdir /tmp/extra
-
-# 5: Install optional extra system packages from extra/apt-packages.txt (if
-# any). One Debian package per line; '#' comments and blank lines are ignored.
-# This allows customizing the image without editing the Dockerfile. The COPY
-# is a silent no-op when the file does not exist in the build context.
-COPY extra/apt-packages.txt* /tmp/extra/
-RUN set -eux; \
-    f=/tmp/extra/apt-packages.txt; \
-    if [ -f "$f" ]; then \
-        pkgs="$(sed -e 's/\r$//' -e 's/#.*//' "$f" | xargs)"; \
-        if [ -n "$pkgs" ]; then \
-            echo "Installing extra system package(s): $pkgs"; \
-            apt-get update && \
-            apt-get install -y --no-install-recommends $pkgs; \
-        fi; \
-        rm -f "$f"; \
-    fi; \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # 4b: Install the buildx CLI plugin (version- and checksum-pinned).
@@ -243,12 +224,30 @@ RUN /opt/venv/bin/playwright install --with-deps \
     chromium-headless-shell \
     && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/*
 
-# 8b: Install optional local Python modules from extra/ (if any): every
-# subdirectory containing packaging metadata (pyproject.toml, setup.py or
-# setup.cfg) is pip installed into the venv. The COPY is a silent no-op
-# when the build context contains no extra/ directory.
+# 8b: Install everything optional from extra/ (if any) in a single layer. The
+# COPY is a silent no-op when the build context has no extra/ directory, which
+# is the case on a fresh clone (extra/ is not part of this repository). Only a
+# wildcard whose parent is the build-context root may match nothing: a nested
+# pattern such as extra/apt-packages.txt* aborts the build instead, so all
+# optional extra/ input must enter the image through this one COPY.
+#
+#   - extra/apt-packages.txt: one Debian package per line ('#' comments and
+#     blank lines are ignored), installed with apt before the local modules.
+#   - every subdirectory containing packaging metadata (pyproject.toml,
+#     setup.py or setup.cfg) is pip installed into the venv.
 COPY extra* /tmp/extra/
 RUN set -eux; \
+    f=/tmp/extra/apt-packages.txt; \
+    if [ -f "$f" ]; then \
+        pkgs="$(sed -e 's/\r$//' -e 's/#.*//' "$f" | xargs)"; \
+        if [ -n "$pkgs" ]; then \
+            echo "Installing extra system package(s): $pkgs"; \
+            apt-get update && \
+            apt-get install -y --no-install-recommends $pkgs; \
+        fi; \
+        rm -f "$f"; \
+    fi; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     count=0; \
     : > /tmp/extra-bin.txt; \
     for d in /tmp/extra/*/; do \
