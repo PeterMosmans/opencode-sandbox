@@ -298,10 +298,11 @@ SANDBOX_BASE_MOUNTS_INIT := -u $$(id -u):$(SANDBOX_GID) \
 SANDBOX_MOUNTS_INIT := $(SANDBOX_BASE_MOUNTS_INIT) $(SANDBOX_OPTIONAL_MOUNTS)
 
 # Used by run-init to enforce that it only bootstraps a FRESH configuration:
-# a single seed opencode.json (or opencode.jsonc, the v2 name) is allowed to
-# exist, everything else means the configuration directory is already in use
-HOST_CONFIG_SEEDS := $(HOME)/.config/opencode/opencode.json $(HOME)/.config/opencode/opencode.jsonc
-HOST_CONFIG_EXTRA := $(filter-out $(HOST_CONFIG_SEEDS),$(wildcard $(HOME)/.config/opencode/*))
+# a single seed opencode.json or opencode.jsonc (the v2 name) is allowed to
+# exist, everything else (including the other seed name) means the
+# configuration directory is already in use
+HOST_CONFIG_SEED := $(firstword $(wildcard $(HOME)/.config/opencode/opencode.json $(HOME)/.config/opencode/opencode.jsonc))
+HOST_CONFIG_EXTRA := $(filter-out $(HOST_CONFIG_SEED),$(wildcard $(HOME)/.config/opencode/*))
 
 # Shared docker build arguments (non-npm packages and runtime config only)
 DOCKER_BUILD_ARGS := \

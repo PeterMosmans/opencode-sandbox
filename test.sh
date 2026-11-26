@@ -125,12 +125,15 @@ run_cmd_shell() {
 # OpenCode v2 accepts opencode.jsonc (JSON with comments) as an alternative
 # name for opencode.json. resolve_config_file asks the container which file
 # actually exists (an explicit $OPENCODE_CONFIG always wins); config_jq runs
-# a jq filter against it. jq cannot parse JSONC comments, so for .jsonc the
-# comments are stripped with node (present in the image) first — the whole
-# pipeline runs inside the container, because that is where jq lives.
+# a jq filter against it. jq cannot parse JSONC, so comments and trailing
+# commas are stripped with node (present in the image) — the whole pipeline
+# runs inside the container, because that is where jq lives.
 
-# Strip // and /* */ comments from JSONC input, keeping strings intact
-JSONC_STRIP_JS='const s=require("fs").readFileSync(process.argv[1],"utf8");process.stdout.write(s.replace(/"(?:[^"\\]|\\.)*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,(m)=>m[0]==="\""?m:""))'
+# Make JSONC parseable by jq in two string-aware passes: first strip // and
+# /* */ comments, then trailing commas (a comma and its closing bracket can
+# be separated by a comment, so both passes must see the joined text)
+# shellcheck disable=SC2016
+JSONC_STRIP_JS='const s=require("fs").readFileSync(process.argv[1],"utf8");let o="",l=0;s.replace(/"(?:[^"\\]|\\.)*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,(m,off)=>{o+=s.slice(l,off)+(m[0]==="\""?m:"");l=off+m.length;return"";});o+=s.slice(l);let p="",q=0;o.replace(/"(?:[^"\\]|\\.)*"/g,(m,off)=>{p+=o.slice(q,off).replace(/,(\s*[}\]])/g,"$1")+m;q=off+m.length;return"";});p+=o.slice(q).replace(/,(\s*[}\]])/g,"$1");process.stdout.write(p)'
 
 # Print the path of the OpenCode config file inside the container; falls back
 # to the classic opencode.json path when no config exists yet (callers check
@@ -142,9 +145,10 @@ resolve_config_file() {
     if [ -n "${OPENCODE_CONFIG:-}" ]; then
       f="$OPENCODE_CONFIG"
     else
-      f="$HOME/.config/opencode/opencode.json"
-      if [ ! -e "$f" ] && [ -e "$HOME/.config/opencode/opencode.jsonc" ]; then
-        f="$HOME/.config/opencode/opencode.jsonc"
+      d="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
+      f="$d/opencode.json"
+      if [ ! -e "$f" ] && [ -e "$d/opencode.jsonc" ]; then
+        f="$d/opencode.jsonc"
       fi
     fi
     # Expand a leading ~ only if present (quote ~ to prevent tilde expansion)
@@ -153,20 +157,29 @@ resolve_config_file() {
     esac
     echo "$f"
   ' 2> /dev/null)"
+  # docker run -t turns newlines into CRLF; strip the CR the capture kept
+  config_file="${config_file%$'\r'}"
   printf '%s\n' "${config_file:-/home/node/.config/opencode/opencode.json}"
 }
 
 # Run jq against the config file: config_jq FILE JQ_FILTER [extra jq args...]
+# .jsonc goes straight through the stripper; .json is parsed as-is and only
+# retried through the stripper when jq chokes (comments are legal in
+# opencode.json too, OpenCode parses both as JSONC)
 config_jq() {
-  local file="$1"
+  local file="$1" out
   shift
   # shellcheck disable=SC2016
-  run_cmd bash -c '
-    case "$1" in
-      *.jsonc) node -e "$2" "$1" ;;
-      *) cat "$1" ;;
-    esac | jq -r "$3" "${@:4}"
-  ' bash "$file" "$JSONC_STRIP_JS" "$@" 2> /dev/null
+  out="$(run_cmd bash -c '
+    set -o pipefail
+    if [ "${1##*.}" = jsonc ]; then
+      node -e "$2" "$1" | jq -r "$3" "${@:4}"
+    else
+      jq -r "$3" "$1" || node -e "$2" "$1" | jq -r "$3" "${@:4}"
+    fi
+  ' bash "$file" "$JSONC_STRIP_JS" "$@" 2> /dev/null)"
+  # docker run -t turns newlines into CRLF; strip the CRs the capture kept
+  printf '%s\n' "${out//$'\r'/}"
 }
 
 # === Test dependency tracking ===
@@ -714,6 +727,10 @@ test_config() {
     success "Configuration file found: ${BOLD}${config_file}${RESET}"
 
     if run_cmd command -v jq > /dev/null 2>&1; then
+      if [ "${config_file##*.}" = "jsonc" ] && ! run_cmd command -v node > /dev/null 2>&1; then
+        error "node not found — cannot strip JSONC comments from ${config_file}"
+        return 1
+      fi
       local model
       model="$(config_jq "$config_file" '.model // "not set"')"
       printf '  Default model: %b%s%b\n' "$BOLD" "$model" "$RESET"
@@ -724,7 +741,8 @@ test_config() {
         printf '  Providers:\n'
         while IFS= read -r provider; do
           local url
-          url="$(config_jq "$config_file" ".provider[\"${provider}\"].options.baseURL // \"not set\"")"
+          # shellcheck disable=SC2016
+          url="$(config_jq "$config_file" '.provider[$p].options.baseURL // "not set"' --arg p "$provider")"
           printf '    %b%s%b -> %s\n' "$BOLD" "$provider" "$RESET" "$url"
         done <<< "$providers"
       fi
